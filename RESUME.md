@@ -4,8 +4,8 @@ For the next session picking this up. Read `CLAUDE.md` first (architecture, port
 
 ## Where it stands
 
-- All work is committed locally on `main` and **not pushed** (no remote yet). Latest: `571cfa4` elbow arrows.
-- `bun test`: 75 tests, all passing. Snapshots in `test/out/*.png`.
+- All work is committed locally on `main` and **not pushed** (no remote yet). Latest: `f49bbe1` images + boards over 1 MiB.
+- `bun test`: 90 tests, all passing. Snapshots in `test/out/*.png`.
 - Installed into `~/.config/herdr-app/mods/herdr-draw` (via `scripts/dev-sync.sh`); `drawh` is on PATH (`~/.local/bin/drawh` → the installed copy).
 
 Built so far (commit order):
@@ -16,6 +16,9 @@ Built so far (commit order):
 5. Mermaid flowchart import (paste, or `drawh mermaid`), layered layout, subgraph frames.
 6. Excalidraw fidelity: rounded corners, hachure / cross-hatch, every arrowhead type, font families.
 7. Elbow arrows with obstacle-avoiding routes; hatch work bounded.
+8. Images (2026-11-08, second session): Excalidraw `image` elements + `files`; drop or ⌘V in the pane, `drawh image` for agents;
+   aspect-locked resize (shift frees), copy/paste with files, SVG export embeds them. Board I/O now handles files over 1 MiB
+   (`adapters/herdr/io.js`): Herdr's `readTextFile` caps at 1 MiB, which photo boards pass at once.
 
 ## Open issue outside this repo
 
@@ -41,7 +44,10 @@ Window `31533` / `~/.cache/eht` belongs to the engram agent: leave it alone.
 
 ## Next gaps, most valuable first
 
-1. **Images** (paste / drop a PNG, Excalidraw `image` elements + `files`). Herdr's `image()` only loads files under the Herdr home, so copy into `~/.config/herdr-app/.cache/herdr-draw/` (see herdr-md's `loadImages`). SVG export can embed data URIs.
+1. **Image loose ends.** Not verified live: ⌘V of a clipboard picture (osascript «class PNGf»), drag-and-drop (`on_drop`), and the
+   pane's own save of a >1 MiB board (tested headless with real shell commands only). theGrid key presses to the test window
+   (id from `window_find --pid`) did not reach the pane, even after `herdr-app do herdr-draw.focus`; find another way before retrying.
+   Also open: binding arrows to images (only shapes bind), and a board over 8 MiB can't be read (exec's output cap).
 2. **PNG export.** No rasterizer in the mod: shell out to headless Chrome like `test/harness/raster.js`, or `sips` an SVG (check quality).
 3. **Library / templates** (save a selection, insert it; Excalidraw `.excalidrawlib` format).
 4. **Elbow fidelity**: write Excalidraw's `fixedPoint` bindings so elbows open right in excalidraw.com; measure routing cost when dragging a hub with many elbows.
