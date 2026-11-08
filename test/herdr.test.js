@@ -218,7 +218,7 @@ test("dropping something that isn't an image says so and adds nothing", async ()
   const n = ui.view.ed.doc.live().length;
   ui.on("on_drop", { paths: ["/tmp/notes.txt"] });
   expect(ui.view.ed.doc.live().length).toBe(n);
-  expect(textOf(ui.tree())).toContain("only images");
+  expect(textOf(ui.tree())).toContain("drop images or .excalidrawlib");
 });
 
 test("an image written by someone else (drawh, a peer) is decoded into the cache and shown", async () => {
@@ -321,4 +321,69 @@ test("⌘⇧E writes board.svg and a 2x board.png beside the board, cropped to t
   expect(textOf(ui.tree())).toContain("exported board.svg + .png");
   expect(readdirSync(`${home}/.cache/herdr-draw/tmp`)).toEqual([]);   // the 2x SVG is gone
   Bun.spawnSync(["cp", `${base}.png`, `${ROOT}test/out/herdr-export.png`]);
+});
+
+// ── library ────────────────────────────────────────────────────────────────
+const LIB = `${home}/herdr-draw/library.excalidrawlib`;
+const libItem = (id, name, x = 0) => ({ id, status: "unpublished", created: 1, name, elements: [
+  { id: `${id}-r`, type: "rectangle", x, y: 0, width: 120, height: 60, angle: 0, version: 1, versionNonce: 1, isDeleted: false, groupIds: [], strokeColor: "#1e1e1e", backgroundColor: "#a5d8ff", strokeWidth: 2, roughness: 1, seed: 3, boundElements: [{ id: `${id}-t`, type: "text" }] },
+  { id: `${id}-t`, type: "text", text: name, x, y: 20, width: 80, height: 25, fontSize: 20, angle: 0, version: 1, versionNonce: 1, isDeleted: false, containerId: `${id}-r`, strokeColor: "#1e1e1e" },
+] });
+
+test("library panel: lists items with a drawn preview; a click inserts one into the board", async () => {
+  realImages();
+  Bun.spawnSync(["mkdir", "-p", `${home}/herdr-draw`]);
+  writeFileSync(LIB, JSON.stringify({ type: "excalidrawlib", version: 2, libraryItems: [libItem("db", "Database"), libItem("q", "Queue")] }));
+  writeFileSync(file, JSON.stringify({ type: "excalidraw", version: 2, elements: [], appState: {}, files: {} }));
+  const ui = await open();
+  await ui.cx.flush();
+  const tile = byId(ui.tree(), "lib-db");
+  expect(textOf(tile)).toContain("Database");
+  expect(find(tile, n => n.kind === "path")).toBeTruthy();                 // a little drawing, not just a name
+  expect(textOf(ui.tree())).toContain("LIBRARY · 2");
+  ui.click("lib-db");
+  const ed = ui.view.ed;
+  expect(ed.doc.live().map(e => e.type).sort()).toEqual(["rectangle", "text"]);
+  expect(ed.doc.live().find(e => e.type === "text").text).toBe("Database");
+  await ui.cx.flush();
+  expect(ui.disk().elements.filter(e => !e.isDeleted).length).toBe(2);       // saved like any edit
+});
+
+test("+ saves the selection to the library file (big pictures too); ✕ removes it", async () => {
+  realImages();
+  const big = Buffer.alloc(700_000, 3).toString("base64");                    // the library passes 900 KB: io.js's big path
+  writeFileSync(file, JSON.stringify({ type: "excalidraw", version: 2, appState: {}, elements: [
+    { id: "pic", type: "image", fileId: "bigpic", x: 0, y: 0, width: 200, height: 100, angle: 0, opacity: 100, version: 2, versionNonce: 1, isDeleted: false, customData: { layer: "base", z: 1 } },
+  ], files: { bigpic: { id: "bigpic", mimeType: "image/png", dataURL: `data:image/png;base64,${big}` } } }));
+  const ui = await open();
+  await ui.cx.flush();
+  const before = calls.exec.length;
+  ui.view.ed.select(["pic"]);
+  ui.click("lib-add");
+  await ui.cx.flush();
+  const lib = JSON.parse(readFileSync(LIB, "utf8"));
+  expect(lib.libraryItems.length).toBe(3);
+  expect(lib.libraryItems[0].files.bigpic.dataURL.length).toBe(big.length + 22);
+  expect(calls.exec.slice(before).some(c => c[0] === "sh" && c[3] === "big-write")).toBe(true);
+  expect(textOf(ui.tree())).toContain("LIBRARY · 3");
+  const id = lib.libraryItems[0].id;
+  ui.fire(`lib-rm-${id}`, "on_click", ui.ev(0, 0));
+  await ui.cx.flush();
+  expect(JSON.parse(readFileSync(LIB, "utf8")).libraryItems.map(i => i.id)).not.toContain(id);
+});
+
+test("dropping a .excalidrawlib adds its items once, however often it's dropped", async () => {
+  realImages();
+  const drop = `${home}/shared.excalidrawlib`;
+  writeFileSync(drop, JSON.stringify({ type: "excalidrawlib", version: 2, libraryItems: [libItem("cache", "Cache"), libItem("db", "Database")] }));
+  const ui = await open();
+  await ui.cx.flush();
+  const n = JSON.parse(readFileSync(LIB, "utf8")).libraryItems.length;
+  ui.on("on_drop", { paths: [drop] }); await ui.cx.flush();
+  ui.on("on_drop", { paths: [drop] }); await ui.cx.flush();
+  const ids = JSON.parse(readFileSync(LIB, "utf8")).libraryItems.map(i => i.id);
+  expect(ids.length).toBe(n + 1);                                            // "db" was already there; "cache" is new
+  expect(ids[0]).toBe("cache");
+  expect(textOf(ui.tree())).toContain("library: 0 items added");             // the second drop
+  await ui.shot("herdr-library");
 });

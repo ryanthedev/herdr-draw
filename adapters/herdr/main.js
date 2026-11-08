@@ -10,7 +10,11 @@ import { props, exec, theme, settings, home, appHome, nextCommand, panes, readTe
 import { Editor, TOOLS, STROKES, FILLS, WIDTHS, STYLES } from "./core/editor.js";
 import { withAlpha } from "./core/render.js";
 import { PRESET_NAMES } from "./core/anim.js";
-import { exportScene, boardTheme } from "./core/export.js";
+import { exportScene, boardTheme, paintedBox } from "./core/export.js";
+import { parseLibrary, mergeLibrary } from "./core/library.js";
+import { Doc } from "./core/doc.js";
+import { paintScene } from "./core/render.js";
+import { LibraryStore } from "./library-store.js";
 import { FONT_FAMILY } from "./core/style.js";
 import { isShape, isLabel, layerOf } from "./core/model.js";
 import { toSvg } from "./svg.js";
@@ -58,6 +62,35 @@ const CLIP_SH = `out="$1"; mkdir -p "$(dirname "$out")"; rm -f "$out"
 osascript -e 'on run argv' -e 'set f to open for access (POSIX file (item 1 of argv)) with write permission' -e 'set eof f to 0' -e 'write (the clipboard as «class PNGf») to f' -e 'close access f' -e 'end run' "$out" >/dev/null 2>&1
 [ -s "$out" ] && printf %s "$out"`;
 
+// A display list → native path layers in paint order (consecutive paths with one style become
+// one path), images between them, and the text items (drawn as divs on top).
+function batchPaths(items) {
+  const layers = [], texts = [];
+  let cur = null;
+  for (const it of items) {
+    if (it.t === "text") { cur = null; texts.push(it); continue; }
+    if (it.t === "image") { cur = null; layers.push({ img: it, n: 1 }); continue; }
+    const color = withAlpha(it.fill ?? it.stroke, it.opacity ?? 1);
+    const key = it.fill ? `f|${color}` : `s|${color}|${it.width}|${it.dash?.join(",") ?? ""}`;
+    if (!cur || cur.key !== key) {
+      let b = it.fill ? PathBuilder.fill() : PathBuilder.stroke(it.width);
+      if (it.dash) b = b.dash_array(it.dash);
+      cur = { key, color, b, n: 0 }; layers.push(cur);
+    }
+    let started = false;
+    for (const c of it.cmds) {
+      if (c[0] === "M" && it.fill && started) cur.b.close();   // each filled shape closes before the next starts
+      started = true;
+      if (c[0] === "M") cur.b.move_to(c[1], c[2]);
+      else if (c[0] === "L") cur.b.line_to(c[1], c[2]);
+      else if (c[0] === "Q") cur.b.curve_to(c[1], c[2], c[3], c[4]);
+    }
+    if (it.fill) cur.b.close();
+    cur.n++;
+  }
+  return { layers, texts };
+}
+
 export default class Draw extends View {
   init(_props, cx) {
     const p = props() ?? {};
@@ -86,6 +119,9 @@ export default class Draw extends View {
     this.input.on("blur", (_e, cx) => { this.inputFocused = false; if (this.ed.text) { this.ed.commitText(); this.after(cx); } });
     this.layerInput = InputState.new({ value: "", placeholder: "Layer name" });
     this.layerInput.on("submit", (_e, cx) => { if (this.renaming) this.ed.updateLayer(this.renaming, { name: this.layerInput.value() || "Layer" }); this.renaming = null; this.handle.focus(); this.after(cx); });
+    this.lib = new LibraryStore({ onChange: () => { this.previews.clear(); }, onError: m => { this.flash = m; } });
+    this.previews = new Map();   // library item id → its preview's path layers
+    cx.spawn(async acx => { await this.lib.start(acx); });
     if (this.file) {
       this.store = new FileStore(this.file, this.ed, {
         onError: m => { this.error = m; },
@@ -236,8 +272,10 @@ export default class Draw extends View {
     const ed = this.ed;
     return el
       .on_drop((e, cx) => {
+        const libs = (e?.paths ?? []).filter(p => /\.excalidrawlib$/i.test(p));
+        if (libs.length) { cx.spawn(async cx => { await this.importLibraries(libs); this.after(cx); }); return; }
         const paths = (e?.paths ?? []).filter(p => IMAGE_FILE.test(p));
-        if (!paths.length) { this.flash = "only images can be dropped here"; return this.after(cx); }
+        if (!paths.length) { this.flash = "drop images or .excalidrawlib libraries here"; return this.after(cx); }
         cx.spawn(async cx => { await this.importImages(paths); this.after(cx); });
       })
       .on_size_change((size, cx) => {
@@ -330,32 +368,7 @@ export default class Draw extends View {
   }
 
   canvas(t) {
-    const items = this.ed.displayList(this.palette());
-    const layers = [], texts = [];
-    // Consecutive paths with one style become one native path; order is kept.
-    let cur = null;
-    for (const it of items) {
-      if (it.t === "text") { cur = null; texts.push(it); continue; }
-      // Images sit in paint order between path batches (text still paints above everything).
-      if (it.t === "image") { cur = null; layers.push({ img: it, n: 1 }); continue; }
-      const color = withAlpha(it.fill ?? it.stroke, it.opacity ?? 1);
-      const key = it.fill ? `f|${color}` : `s|${color}|${it.width}|${it.dash?.join(",") ?? ""}`;
-      if (!cur || cur.key !== key) {
-        let b = it.fill ? PathBuilder.fill() : PathBuilder.stroke(it.width);
-        if (it.dash) b = b.dash_array(it.dash);
-        cur = { key, color, b, n: 0 }; layers.push(cur);
-      }
-      let started = false;
-      for (const c of it.cmds) {
-        if (c[0] === "M" && it.fill && started) cur.b.close();   // each filled shape closes before the next starts
-        started = true;
-        if (c[0] === "M") cur.b.move_to(c[1], c[2]);
-        else if (c[0] === "L") cur.b.line_to(c[1], c[2]);
-        else if (c[0] === "Q") cur.b.curve_to(c[1], c[2], c[3], c[4]);
-      }
-      if (it.fill) cur.b.close();
-      cur.n++;
-    }
+    const { layers, texts } = batchPaths(this.ed.displayList(this.palette()));
     const tool = this.ed.tool;
     let el = div().id("draw-canvas").flex_1().min_w(0).h_full().relative().overflow_hidden();
     if (tool === "hand") el = el.cursor_grab(); else if (tool !== "select") el = el.cursor_crosshair();
@@ -364,6 +377,64 @@ export default class Draw extends View {
       .children(texts.map(it => this.textItem(it, t)))
       .when(!this.ed.doc.live().length && !this.error, e => e.child(this.emptyHint(t)))
       .when(!!this.ed.text, e => e.child(this.textInput(t)));
+  }
+
+  // ── library ──────────────────────────────────────────────────────────
+
+  async importLibraries(paths) {
+    let n = 0;
+    for (const p of paths) {
+      try {
+        const items = parseLibrary(await readText(p) ?? "");
+        await this.lib.update(cur => { const next = mergeLibrary(cur, items); n += next.length - cur.length; return next; });
+      } catch (e) { this.flash = `Can't read ${p.split("/").pop()}: ${e?.message ?? e}`; return; }
+    }
+    this.previews.clear();
+    this.flash = `library: ${n} item${n === 1 ? "" : "s"} added`;
+  }
+
+  saveToLibrary(cx) {
+    const item = this.ed.libraryItem();
+    if (!item) { this.flash = "select something to save it to the library"; return; }
+    cx.spawn(async cx => { if (await this.lib.update(cur => [item, ...cur])) this.flash = `saved "${item.name ?? "item"}" to the library`; cx.notify(); });
+  }
+
+  removeFromLibrary(id, cx) {
+    cx.spawn(async cx => { await this.lib.update(cur => cur.filter(i => i.id !== id)); this.previews.delete(id); cx.notify(); });
+  }
+
+  // A small drawing of the item: paths only (text and pictures are left out), fitted into w × h.
+  preview(item, w, h) {
+    let p = this.previews.get(item.id);
+    if (!p) {
+      const pal = this.palette(), doc = new Doc({ elements: item.elements, files: {} });
+      const box = paintedBox(doc, pal) ?? { x: 0, y: 0, w: 1, h: 1 }, pad = 3;
+      const k = Math.min(1, (w - pad * 2) / Math.max(1, box.w), (h - pad * 2) / Math.max(1, box.h));
+      const ox = (w - box.w * k) / 2, oy = (h - box.h * k) / 2;
+      const items = paintScene(doc, { x: ox / k - box.x, y: oy / k - box.y, scale: k }, pal).filter(i => i.t === "path");
+      p = batchPaths(items).layers.filter(l => l.n && !l.img);
+      this.previews.set(item.id, p);
+    }
+    return div().relative().w(w).h(h).overflow_hidden().rounded(4).bg(withAlpha(this.palette().fg, 0.04))
+      .children(p.map(l => div().absolute().top(0).left(0).size_full().child(window.paint_path(l.b.build(), l.color))));
+  }
+
+  libraryPanel(t) {
+    const items = this.lib.items, W = 64, H = 44;
+    const tiles = items.map(item => v_flex().id(`lib-${item.id}`).w(W + 8).p(4).gap(2).rounded(6).hover(s => s.bg(t.hover)).cursor_pointer()
+      .tooltip(`Insert "${item.name ?? "item"}" (${item.elements.length} elements)`)
+      .on_click((_e, cx) => { this.ed.insertLibraryItem(item); this.handle.focus(); this.after(cx); })
+      .child(this.preview(item, W, H))
+      .child(h_flex().w_full().gap(2).items_center()
+        .child(div().flex_1().truncate().text_size(10).text_color(t.muted).child(item.name ?? "item"))
+        .child(div().id(`lib-rm-${item.id}`).text_size(10).text_color(t.dim).hover(s => s.text_color(t.foreground)).tooltip("Remove from the library")
+          .on_click((_e, cx) => { cx.stop_propagation(); this.removeFromLibrary(item.id, cx); }).child("✕"))));
+    const body = v_flex().gap(6)
+      .child(h_flex().flex_wrap().gap(2).children(tiles))
+      .when(!items.length, e => e.child(div().text_size(11).text_color(t.dim).child("Save a selection with +, or drop a .excalidrawlib")))
+      .child(h_flex().gap(4)
+        .child(this.chip(t, "lib-add", "+ save selection", false, "Save the selection to the library", cx => this.saveToLibrary(cx), 100)));
+    return this.section(t, `Library · ${items.length}`, body);
   }
 
   // GPUI can't rotate an image: like text, it stays upright here (SVG export turns it).
@@ -413,14 +484,15 @@ export default class Draw extends View {
       .child(this.properties(t))
       .child(this.arrange(t))
       .child(this.animatePanel(t))
-      .child(this.layersPanel(t));
+      .child(this.layersPanel(t))
+      .child(this.libraryPanel(t));
   }
 
   chip(t, id, label, active, tip, fn, w = 26) {
     return div().id(id).h(24).min_w(w).px(4).rounded(5).flex().items_center().justify_center().text_size(12)
       .border(1).border_color(active ? t.accent : t.border).bg(active ? withAlpha(t.accent, 0.18) : CLEAR)
       .hover(s => s.bg(t.hover)).cursor_pointer().tooltip(tip)
-      .on_click((_e, cx) => { fn(); this.handle.focus(); this.after(cx); }).child(label);
+      .on_click((_e, cx) => { fn(cx); this.handle.focus(); this.after(cx); }).child(label);
   }
 
   swatch(t, id, color, active, fn) {
