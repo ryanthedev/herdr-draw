@@ -79,3 +79,13 @@ test("exports use the board's page color, with ink that reads on it", async () =
   expect(boardTheme({ viewBackgroundColor: "#1a1b1e" })).toMatchObject({ bg: "#1a1b1e", fg: DARK.fg });
   expect(boardTheme({ viewBackgroundColor: "red; x" }).bg).toBe("#ffffff");   // a hostile value falls back
 });
+
+test("a raster export leaves out embedded SVG pictures (their links could make the rasterizer fetch files or URLs)", () => {
+  const evil = "data:image/svg+xml;base64," + Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><image href="file:///etc/passwd"/></svg>').toString("base64");
+  const items = [{ t: "image", fileId: "s", x: 0, y: 0, w: 10, h: 10 }, { t: "image", fileId: "p", x: 20, y: 0, w: 10, h: 10 }];
+  const files = { s: { dataURL: evil }, p: { dataURL: PNG } };
+  expect(toSvg(items, { files })).toContain(evil);                       // the SVG export keeps it: a browser's <image> loads nothing external
+  const raster = toSvg(items, { files, svgImages: false });
+  expect(raster).not.toContain("svg+xml");
+  expect(raster).toContain(PNG);
+});

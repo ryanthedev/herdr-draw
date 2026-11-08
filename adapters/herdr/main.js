@@ -269,7 +269,7 @@ export default class Draw extends View {
       // The SVG to rasterize waits in the cache, not beside the board: the board's folder is watched.
       const dir = `${appHome()}/.cache/herdr-draw/tmp`, tmp = `${dir}/export-${Date.now()}.svg`;
       await exec("mkdir", ["-p", dir]);
-      await writeText(tmp, toSvg(big.items, big), null);
+      await writeText(tmp, toSvg(big.items, { ...big, svgImages: false }), null);   // see toSvg: no nested SVGs for sips
       const r = await exec("sh", ["-c", 'sips -s format png "$1" --out "$2" >/dev/null 2>&1; s=$?; rm -f "$1"; exit $s', "png-export", tmp, `${base}.png`]);
       if (r.code !== 0) throw new Error(`sips couldn't make the PNG (${r.stderr || r.code})`);
       this.flash = `exported ${name(base)}.svg + .png`;

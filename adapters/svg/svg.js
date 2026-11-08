@@ -31,7 +31,9 @@ const FACES = {
 const DATA_URL = /^data:image\/(?:png|jpeg|gif|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/;
 
 // `scale`: pixels per unit. The viewBox stays in drawing units; only the pixel size grows.
-export function toSvg(items, { width, height, background, font = FACES.sans, files = {}, scale = 1 } = {}) {
+// `svgImages: false` for anything a rasterizer will read (PNG export): an embedded SVG picture is the
+// board's content, and its own links (file://, http) could make sips fetch them. Browsers don't.
+export function toSvg(items, { width, height, background, font = FACES.sans, files = {}, scale = 1, svgImages = true } = {}) {
   width = num(width, 800); height = num(height, 600); scale = num(scale, 1) > 0 ? num(scale, 1) : 1; const base = esc(font ?? FACES.sans);
   const px = v => +(v * scale).toFixed(2);
   const out = [`<svg xmlns="http://www.w3.org/2000/svg" width="${px(width)}" height="${px(height)}" viewBox="0 0 ${width} ${height}">`];
@@ -45,6 +47,7 @@ export function toSvg(items, { width, height, background, font = FACES.sans, fil
     } else if (it.t === "image") {
       const url = files?.[it.fileId]?.dataURL;
       if (typeof url !== "string" || !DATA_URL.test(url)) continue;
+      if (!svgImages && url.startsWith("data:image/svg+xml")) continue;
       const deg = num(it.angle) * 180 / Math.PI, x = num(it.x), y = num(it.y), w = Math.max(0, num(it.w)), h = Math.max(0, num(it.h));
       const turn = deg ? ` transform="rotate(${deg.toFixed(2)} ${num(it.cx).toFixed(1)} ${num(it.cy).toFixed(1)})"` : "";
       out.push(`<image href="${url}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" preserveAspectRatio="none" opacity="${op.toFixed(3)}"${turn}/>`);

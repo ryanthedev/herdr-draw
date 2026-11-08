@@ -203,14 +203,14 @@ def run_js(script, stdin):
     die("needs node or bun on PATH")
 
 
-def export_svg(scene, scale, dark):
+def export_svg(scene, scale, dark, raster=False):
     """The pane's export: core/export.js crops and paints, svg.js writes the SVG."""
     script = ("import { exportScene, boardTheme, DARK } from %s; import { Doc } from %s; import { toSvg } from %s;"
               "let s = ''; process.stdin.on('data', d => s += d); process.stdin.on('end', () => {"
               " const doc = new Doc(JSON.parse(s)); const theme = %s ? DARK : boardTheme(doc.appState);"
-              " const x = exportScene(doc, theme, { scale: %s, maxPixels: 4096 }); process.stdout.write(toSvg(x.items, x)); });") % (
+              " const x = exportScene(doc, theme, { scale: %s, maxPixels: 4096 }); process.stdout.write(toSvg(x.items, { ...x, svgImages: %s })); });") % (
         json.dumps("file://" + os.path.join(core_dir(), "export.js")), json.dumps("file://" + os.path.join(core_dir(), "doc.js")),
-        json.dumps("file://" + svg_module()), "true" if dark else "false", json.dumps(float(scale)))
+        json.dumps("file://" + svg_module()), "true" if dark else "false", json.dumps(float(scale)), "false" if raster else "true")
     return run_js(script, json.dumps(scene))
 
 
@@ -375,7 +375,7 @@ def main():
             die(f"no such board: {path}")
         stem = path[:-len(".excalidraw")] if path.endswith(".excalidraw") else path
         out = os.path.abspath(os.path.expanduser(args.out)) if args.out else stem + (".svg" if args.svg else ".png")
-        svg = export_svg(scene, 1 if args.svg else args.scale, args.dark)
+        svg = export_svg(scene, 1 if args.svg else args.scale, args.dark, raster=not args.svg)   # no nested SVGs for sips
         if args.svg:
             with open(out, "w") as f:
                 f.write(svg)
