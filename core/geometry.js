@@ -76,10 +76,20 @@ export function hits(doc, el, p, tol) {
   return false;
 }
 
+// Topmost precise hit (an outline, a filled shape, text, a line). Failing that, the
+// smallest unfilled shape the point is inside: empty boxes are selectable from
+// anywhere inside, but a big one drawn on top doesn't block the shapes under it.
+// Frames stay click-through inside so a marquee can start within them.
 export function hitTest(doc, p, tol = 6) {
   const els = doc.visible();
   for (let i = els.length - 1; i >= 0; i--) if (hits(doc, els[i], p, tol)) return els[i];
-  return null;
+  let best = null, area = Infinity;
+  for (const el of els) {
+    if (!isShape(el) || el.type === "frame" || outlineDistance(el, p) > 0) continue;
+    const b = bbox(el), a = b.w * b.h;
+    if (a < area) { best = el; area = a; }
+  }
+  return best;
 }
 
 // The topmost shape whose box contains p (arrow binding targets).

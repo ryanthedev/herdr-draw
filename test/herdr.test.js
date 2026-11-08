@@ -85,6 +85,26 @@ test("double-click a shape, type in the input, Enter: a label", async () => {
   expect(label?.containerId).toBeTruthy();
 });
 
+test("typing works whether or not the text box got the keyboard", async () => {
+  const ui = await open();
+  ui.key("r"); ui.drag([100, 420], [240, 500]);
+  ui.dblclick([170, 460]);
+  // Real key events, sent where the keyboard is: the box if it took focus, else the pane.
+  const send = (key, m = {}) => { const n = find(ui.tree(), n => n.kind === "input"); if (n?.state.focused) n.state.type(n.state.value() + (key === "space" ? " " : key), ui.cx.async); else ui.key(key, m); };
+  for (const k of ["H", "i", "space", "y", "o"]) send(k, k === "H" ? { shift: true } : {});
+  ui.key("enter");
+  expect(ui.view.ed.doc.live().some(e => e.type === "text" && e.text === "Hi yo")).toBe(true);
+  // And when it did take the keyboard after the frame:
+  ui.dblclick([170, 460]);
+  ui.tree(); await ui.cx.flush(1);
+  expect(find(ui.tree(), n => n.kind === "input").state.focused).toBe(true);
+});
+
+test("opening a board never zooms past 100%", async () => {
+  const ui = await open();
+  expect(ui.view.ed.view.scale).toBeLessThanOrEqual(1);
+});
+
 test("properties panel: a fill swatch fills the selection; layer panel adds and hides a layer", async () => {
   const ui = await open();
   ui.key("r"); ui.drag([100, 300], [200, 380]);

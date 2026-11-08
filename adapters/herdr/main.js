@@ -35,7 +35,8 @@ export default class Draw extends View {
     this.input = InputState.new({ value: "", placeholder: "Type…" });
     this.input.on("change", (_e, cx) => { this.ed.setText(this.input.value()); this.after(cx); });
     this.input.on("submit", (_e, cx) => { this.ed.commitText(); this.after(cx); });
-    this.input.on("blur", (_e, cx) => { if (this.ed.text) { this.ed.commitText(); this.after(cx); } });
+    this.input.on("focus", () => { this.inputFocused = true; });
+    this.input.on("blur", (_e, cx) => { this.inputFocused = false; if (this.ed.text) { this.ed.commitText(); this.after(cx); } });
     this.layerInput = InputState.new({ value: "", placeholder: "Layer name" });
     this.layerInput.on("submit", (_e, cx) => { if (this.renaming) this.ed.updateLayer(this.renaming, { name: this.layerInput.value() || "Layer" }); this.renaming = null; this.handle.focus(); this.after(cx); });
     if (this.file) {
@@ -56,12 +57,18 @@ export default class Draw extends View {
     });
   }
 
+  // On open, show the drawing at 100% (centered) unless it's too big, then zoom out to fit.
   maybeFit() { if (!this.fitted && this.measured && this.ed.doc.live().length) { this.fitted = true; this.ed.fit(); } }
 
   // After every event: keep the text box, timer and agent selection file in step.
   after(cx) {
     const ed = this.ed;
-    if (ed.text && !this.textOpen) { this.textOpen = true; this.input.set_value(ed.text.value); this.input.focus(); }
+    if (ed.text && !this.textOpen) {
+      this.textOpen = true; this.input.set_value(ed.text.value);
+      // The Input isn't drawn yet, so it can't take the keyboard now: ask again after the frame.
+      this.input.focus();
+      cx.timer.after(30, () => { if (this.ed.text && !this.inputFocused) this.input.focus(); });
+    }
     if (!ed.text && this.textOpen) { this.textOpen = false; this.handle.focus(); }
     if (ed.needsTick() && !this.tick) {
       this.tick = cx.timer.every(16, cx2 => {
@@ -91,8 +98,24 @@ export default class Draw extends View {
   pt(e) { const z = Z(); return { x: e.local_position.x / z, y: e.local_position.y / z }; }
   mods(e) { const m = e.modifiers ?? {}; return { shift: m.shift, alt: m.alt, cmd: m.platform, ctrl: m.control, clickCount: e.click_count ?? 1, button: e.button }; }
 
+  // Typing while the text box doesn't have the keyboard: type into it from here.
+  typeFallback(e, cx) {
+    const m = e.modifiers ?? {}, v = this.input.value();
+    if (m.platform || m.control) return false;
+    let next = null;
+    if (e.key === "enter") { this.ed.commitText(); this.after(cx); return true; }
+    if (e.key === "escape") { this.ed.commitText(); this.after(cx); return true; }
+    if (e.key === "backspace") next = v.slice(0, -1);
+    else if (e.key === "space") next = v + " ";
+    else { const ch = e.key_char ?? (e.key.length === 1 ? (m.shift ? e.key.toUpperCase() : e.key) : null); if (ch) next = v + ch; }
+    if (next === null) return false;
+    this.input.set_value(next); this.ed.setText(next); this.after(cx);
+    return true;
+  }
+
   keys(e, cx) {
     if (this.renaming) return;
+    if (this.ed.text && !this.inputFocused) { if (this.typeFallback(e, cx)) cx.stop_propagation(); return; }
     const ed = this.ed, m = e.modifiers ?? {}, mm = { shift: m.shift, alt: m.alt, cmd: m.platform, ctrl: m.control };
     if (!ed.text && m.platform && (e.key === "c" || e.key === "x")) {
       // The system clipboard gets Excalidraw's format, so paste works in excalidraw.com too.
@@ -259,7 +282,7 @@ export default class Draw extends View {
 
   swatch(t, id, color, active, fn) {
     const fill = color === "transparent" ? CLEAR : color === "#1e1e1e" ? t.foreground : color;
-    return div().id(id).w(20).h(20).rounded(5).bg(fill).border(active ? 2 : 1).border_color(active ? t.accent : t.border)
+    return div().id(id).w(18).h(18).rounded(4).bg(fill).border(active ? 2 : 1).border_color(active ? t.accent : t.border)
       .flex().items_center().justify_center().text_size(11).text_color(t.dim).cursor_pointer()
       .on_click((_e, cx) => { fn(); this.handle.focus(); this.after(cx); })
       .when(color === "transparent", e => e.child("∅"));
@@ -267,7 +290,7 @@ export default class Draw extends View {
 
   properties(t) {
     const ed = this.ed, cur = ed.selected()[0] ?? ed.style, s = k => cur[k] ?? ed.style[k];
-    const row = (label, kids) => h_flex().w_full().items_center().gap(4).child(div().w(48).flex_shrink_0().text_size(11).text_color(t.muted).child(label)).child(h_flex().flex_1().flex_wrap().gap(4).children(kids));
+    const row = (label, kids) => h_flex().w_full().items_center().gap(4).child(div().w(44).flex_shrink_0().text_size(11).text_color(t.muted).child(label)).child(h_flex().flex_1().flex_wrap().gap(4).children(kids));
     const body = v_flex().gap(6)
       .child(row("Stroke", STROKES.map((c, i) => this.swatch(t, `st-${i}`, c, s("strokeColor") === c, () => ed.setStyle({ strokeColor: c })))))
       .child(row("Fill", FILLS.map((c, i) => this.swatch(t, `fi-${i}`, c, s("backgroundColor") === c, () => ed.setStyle({ backgroundColor: c })))))
@@ -319,7 +342,7 @@ export default class Draw extends View {
     const rows = layers.map(l => h_flex().id(`ly-${l.id}`).w_full().h(28).px(4).gap(4).items_center().rounded(5)
       .bg(ed.activeLayer === l.id ? withAlpha(t.accent, 0.16) : CLEAR).hover(s => s.bg(t.hover)).cursor_pointer()
       .on_click((e, cx) => {
-        if ((e.click_count ?? 1) >= 2) { this.renaming = l.id; this.layerInput.set_value(l.name); this.layerInput.focus(); }
+        if ((e.click_count ?? 1) >= 2) { this.renaming = l.id; this.layerInput.set_value(l.name); cx.timer.after(30, () => this.layerInput.focus()); }
         else { ed.activeLayer = l.id; ed.changed(); }
         this.after(cx);
       })

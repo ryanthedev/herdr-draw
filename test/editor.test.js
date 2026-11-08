@@ -81,6 +81,38 @@ test("select, move with snapping to another shape's edge", () => {
   expect(r2.x).toBe(100);
 });
 
+test("an empty box is selected and dragged from its middle, selected or not", () => {
+  const t = setup();
+  t.key("r"); t.drag([100, 100], [300, 250]);          // drawn, so selected
+  t.drag([200, 175], [260, 215]);                        // press in the empty middle
+  expect(t.byType("rectangle")[0].x).toBe(160);
+  t.key("escape");
+  t.click([260, 215]);                                   // unselected: a click inside selects it
+  expect(t.ed.sel.size).toBe(1);
+  t.key("escape");
+  t.drag([260, 215], [300, 215]);                        // and a drag inside moves it
+  expect(t.byType("rectangle")[0].x).toBe(200);
+});
+
+test("inside nested empty boxes, the smaller one wins; shapes under a big box stay reachable", () => {
+  const t = setup();
+  t.key("r"); t.drag([150, 150], [250, 230]);            // small, drawn first (underneath)
+  t.key("r"); t.drag([50, 50], [500, 400]);              // big, drawn on top
+  const [small, big] = t.byType("rectangle");
+  t.key("escape");
+  t.click([200, 190]); expect([...t.ed.sel]).toEqual([small.id]);
+  t.key("escape");
+  t.click([400, 300]); expect([...t.ed.sel]).toEqual([big.id]);
+});
+
+test("frames stay click-through inside, so a marquee can start in them", () => {
+  const t = setup();
+  t.key("f"); t.drag([50, 50], [500, 400]);
+  t.key("escape");
+  t.click([250, 250]);
+  expect(t.ed.sel.size).toBe(0);
+});
+
 test("marquee selects enclosed elements; align left; distribute", () => {
   const t = setup();
   for (const [x, y] of [[100, 50], [180, 150], [140, 300]]) { t.key("r"); t.drag([x, y], [x + 60, y + 40]); }

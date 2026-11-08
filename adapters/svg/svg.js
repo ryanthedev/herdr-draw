@@ -3,25 +3,35 @@
 const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 function d(cmds) {
-  return cmds.map(c => c[0] === "Q" ? `Q${c[3].toFixed(1)} ${c[4].toFixed(1)} ${c[1].toFixed(1)} ${c[2].toFixed(1)}` : `${c[0]}${c[1].toFixed(1)} ${c[2].toFixed(1)}`).join("");
+  const f = v => num(v).toFixed(1);
+  return cmds.map(c => c[0] === "Q" ? `Q${f(c[3])} ${f(c[4])} ${f(c[1])} ${f(c[2])}` : `${c[0] === "L" ? "L" : "M"}${f(c[1])} ${f(c[2])}`).join("");
 }
+
+// Board files can come from anywhere (shared files, pasted clipboards), so every
+// value that reaches an attribute is validated or escaped: an exported SVG opened
+// in a browser must not run anything.
+const HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+const num = (v, d = 0) => (Number.isFinite(+v) ? +v : d);
 
 // #rrggbbaa → fill + opacity, since not every SVG renderer reads 8-digit hex.
 function color(c, opacity = 1) {
-  if (c && c.length === 9) return [c.slice(0, 7), (parseInt(c.slice(7), 16) / 255) * opacity];
+  if (!HEX.test(c ?? "")) return ["#888888", opacity];
+  if (c.length === 9) return [c.slice(0, 7), (parseInt(c.slice(7), 16) / 255) * opacity];
   return [c, opacity];
 }
 
 export function toSvg(items, { width, height, background, font = "Helvetica, Arial, sans-serif" } = {}) {
+  width = num(width, 800); height = num(height, 600); font = esc(font);
   const out = [`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`];
-  if (background) out.push(`<rect width="100%" height="100%" fill="${background}"/>`);
-  for (const it of items) {
-    const op = it.opacity ?? 1;
+  if (background) out.push(`<rect width="100%" height="100%" fill="${color(background)[0]}"/>`);
+  for (let it of items) {
+    const op = num(it.opacity, 1);
     if (it.t === "path") {
       if (it.fill) { const [c, o] = color(it.fill, op); out.push(`<path d="${d(it.cmds)}Z" fill="${c}" fill-opacity="${o.toFixed(3)}"/>`); }
-      else { const [c, o] = color(it.stroke, op); out.push(`<path d="${d(it.cmds)}" fill="none" stroke="${c}" stroke-opacity="${o.toFixed(3)}" stroke-width="${it.width}" stroke-linecap="round" stroke-linejoin="round"${it.dash ? ` stroke-dasharray="${it.dash.join(" ")}"` : ""}/>`); }
+      else { const [c, o] = color(it.stroke, op); out.push(`<path d="${d(it.cmds)}" fill="none" stroke="${c}" stroke-opacity="${o.toFixed(3)}" stroke-width="${num(it.width, 1)}" stroke-linecap="round" stroke-linejoin="round"${Array.isArray(it.dash) ? ` stroke-dasharray="${it.dash.map(v => num(v)).join(" ")}"` : ""}/>`); }
     } else if (it.t === "text") {
-      const lines = String(it.text).split("\n"), lh = it.size * (it.lineHeight ?? 1.25), [c, o] = color(it.color, op);
+      const size = num(it.size, 16), lines = String(it.text).split("\n"), lh = size * num(it.lineHeight, 1.25), [c, o] = color(it.color, op);
+      it = { ...it, size, x: num(it.x), y: num(it.y), box: it.box && { x: num(it.box.x), y: num(it.box.y), w: num(it.box.w), h: num(it.box.h) } };
       if (it.box) {
         const cx = it.box.x + it.box.w / 2, top = it.box.y + it.box.h / 2 - (lines.length * lh) / 2;
         lines.forEach((l, i) => out.push(`<text x="${cx.toFixed(1)}" y="${(top + lh * (i + 0.75)).toFixed(1)}" font-family="${font}" font-size="${it.size.toFixed(1)}" fill="${c}" fill-opacity="${o.toFixed(3)}" text-anchor="middle">${esc(l)}</text>`));

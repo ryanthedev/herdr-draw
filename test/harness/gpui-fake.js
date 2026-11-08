@@ -41,11 +41,17 @@ class FakePath {
   build() { return this; }
 }
 
+// Keyboard focus as the fake models it: an input can only take the keyboard once
+// its Input element has been rendered (what the live pane showed: focusing a
+// not-yet-drawn input left typing going nowhere).
+export const focus = { input: null, rendered: new Set() };
+
 class FakeInput {
-  constructor({ value = "" } = {}) { this.v = value; this.handlers = {}; this.focused = false; }
+  constructor({ value = "" } = {}) { this.v = value; this.handlers = {}; }
   value() { return this.v; }
   set_value(v) { this.v = v; }
-  focus() { this.focused = true; }
+  get focused() { return focus.input === this; }
+  focus() { if (focus.rendered.has(this)) { focus.input = this; this.handlers.focus?.({}, null); } }
   on(ev, fn) { this.handlers[ev] = fn; return true; }
   // Test helpers: type and press Enter like a person.
   type(text, cx) { this.v = text; this.handlers.change?.({}, cx); }
@@ -64,7 +70,7 @@ export function installFakes({ file, home }) {
     v_flex: () => makeEl("div", { flex: "col" }),
     h_flex: () => makeEl("div", { flex: "row" }),
     InputState: { new: o => new FakeInput(o) },
-    Input: { new: state => makeEl("input", { state }) },
+    Input: { new: state => { focus.rendered.add(state); return makeEl("input", { state }); } },
   }));
   mock.module("herdr", () => ({
     props: () => ({ file }),
@@ -96,7 +102,7 @@ export function makeCx(calls) {
     const cx = {
       notify: guard("notify", () => { calls.notify++; }),
       spawn: guard("spawn", fn => { const p = Promise.resolve().then(() => fn(asyncCx)); p.catch(e => { calls.errors = (calls.errors ?? []).concat(String(e)); }); return { cancel() {}, is_done: () => false, p }; }),
-      focus_handle: guard("focus_handle", () => ({ focus() {} })),
+      focus_handle: guard("focus_handle", () => ({ focus() { focus.input = null; } })),
       stop_propagation: guard("stop_propagation", () => {}),
       timer: {
         after: guard("timer.after", (ms, fn) => { const t = { ms, fn, every: false, cancelled: false, cancel() { this.cancelled = true; } }; timers.push(t); return t; }),

@@ -210,7 +210,13 @@ export class Editor {
       this.g = { kind: h.kind === "point" ? "point" : "resize", h, start: w, box: this.selBox(), orig: new Map(els.map(e => [e.id, clone(e)])), before: new Map(els.map(e => [e.id, clone(e)])) };
       return;
     }
-    const hit = hitTest(this.doc, w, this.tol());
+    let hit = hitTest(this.doc, w, this.tol());
+    // Inside the current selection's box, a press grabs the selection, even in the
+    // empty middle of an unfilled shape, unless it lands on some other element.
+    if ((!hit || this.sel.has(hit.id)) && !m.shift && this.sel.size) {
+      const b = this.selBox();
+      if (b && inBox(w, b, this.tol())) hit = this.selected().find(e => !isLabel(e) && this.doc.editable(e)) ?? hit;
+    }
     if (hit) {
       const ids = this.withGroup(hit);
       if (m.shift) { if (this.sel.has(hit.id)) ids.forEach(id => this.sel.delete(id)); else ids.forEach(id => this.sel.add(id)); this.changed(); }
@@ -773,7 +779,7 @@ export class Editor {
   fit(els = this.doc.visible().filter(e => !isLabel(e)), pad = 40) {
     if (!els.length) { this.view = { x: 40, y: 40, scale: 1 }; return this.changed(); }
     const b = unionBox(els.map(bbox));
-    const scale = Math.max(0.1, Math.min(2, Math.min((this.size.w - pad * 2) / (b.w || 1), (this.size.h - pad * 2) / (b.h || 1))));
+    const scale = Math.max(0.1, Math.min(1, Math.min((this.size.w - pad * 2) / (b.w || 1), (this.size.h - pad * 2) / (b.h || 1))));
     this.view = { scale, x: (this.size.w / scale - b.w) / 2 - b.x, y: (this.size.h / scale - b.h) / 2 - b.y };
     this.changed();
   }
