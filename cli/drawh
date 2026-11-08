@@ -17,6 +17,8 @@ Coordinates are scene pixels, x right, y down. Shapes are 140x80 unless --w/--h.
   drawh style FILE ID [--color C] [--fill C|none] [--dashed|--solid]
   drawh mermaid FILE [SRC] [--at X,Y] [--elbow]         import a Mermaid flowchart (file, or - / nothing for stdin) as
                                                 editable, laid-out shapes and bound arrows; prints the new ids
+  drawh image FILE PATH [--at X,Y] [--w W]      put a picture (png, jpg, gif, webp, svg; others via sips) on the
+                                                board; natural size unless --w; below the drawing unless --at
   drawh rotate FILE ID... DEG                   turn elements by DEG degrees (clockwise) about their center
   drawh rm FILE ID...                           delete elements (and their labels)
   drawh clear FILE                              delete everything
@@ -34,7 +36,7 @@ Coordinates are scene pixels, x right, y down. Shapes are 140x80 unless --w/--h.
 Shapes, text and grids take --layer NAME (created if missing).
 IDs: anywhere an ID is expected, a shape's exact label also works.
 """
-import argparse, json, math, os, random, subprocess, sys, time
+import argparse, base64, hashlib, json, math, os, random, struct, subprocess, sys, tempfile, time
 
 CACHE = os.path.expanduser("~/.cache/herdr-draw")
 COLORS = {"default": "#1e1e1e", "black": "#1e1e1e", "red": "#e03131", "green": "#2f9e44", "blue": "#1971c2",
@@ -126,6 +128,49 @@ def mermaid_elements(src, elbow=False):
     die("mermaid import needs node or bun on PATH")
 
 
+MIMES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp", "svg": "image/svg+xml"}
+
+
+def image_size(data):
+    """Natural (width, height) from a PNG, GIF, JPEG or WebP header; None if unknown (SVG)."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return struct.unpack(">II", data[16:24])
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return struct.unpack("<HH", data[6:10])
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        kind = data[12:16]
+        if kind == b"VP8X": return (int.from_bytes(data[24:27], "little") + 1, int.from_bytes(data[27:30], "little") + 1)
+        if kind == b"VP8 ": w, h = struct.unpack("<HH", data[26:30]); return (w & 0x3FFF, h & 0x3FFF)
+        if kind == b"VP8L": b = int.from_bytes(data[21:25], "little"); return ((b & 0x3FFF) + 1, ((b >> 14) & 0x3FFF) + 1)
+    if data[:2] == b"\xff\xd8":
+        i = 2
+        while i + 9 < len(data):
+            if data[i] != 0xFF: i += 1; continue
+            marker, size = data[i + 1], struct.unpack(">H", data[i + 2:i + 4])[0]
+            if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                h, w = struct.unpack(">HH", data[i + 5:i + 9]); return (w, h)
+            i += 2 + size
+    return None
+
+
+def read_image(src):
+    """(mime, bytes) for a picture file; formats Excalidraw can't show are converted to PNG with sips."""
+    ext = src.rsplit(".", 1)[-1].lower()
+    if not os.path.isfile(src):
+        die(f"no such file: {src}")
+    if ext in MIMES:
+        data = open(src, "rb").read()
+        if ext != "svg" and image_size(data) is None:
+            die(f"{src} isn't a {ext} image")
+        return MIMES[ext], data
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, "x.png")
+        r = subprocess.run(["sips", "-s", "format", "png", src, "--out", out], capture_output=True)
+        if r.returncode or not os.path.exists(out):
+            die(f"{src} isn't an image drawh can read")
+        return "image/png", open(out, "rb").read()
+
+
 def touch(el):
     el["version"] = el.get("version", 1) + 1
     el["versionNonce"] = rnd()
@@ -211,7 +256,10 @@ def describe(scene, e):
     for k, name in (("startBinding", "from"), ("endBinding", "to")):
         if e.get(k):
             d[name] = e[k]["elementId"]
-    if e.get("strokeColor") != COLORS["default"]:
+    if e["type"] == "image":
+        f = scene.get("files", {}).get(e.get("fileId"))
+        d["image"] = f["mimeType"] if f else "missing file"
+    elif e.get("strokeColor") != COLORS["default"]:
         d["color"] = e.get("strokeColor")
     return d
 
@@ -233,6 +281,7 @@ def main():
     s = sub.add_parser("style"); s.add_argument("file"); s.add_argument("id"); s.add_argument("--color"); s.add_argument("--fill")
     s.add_argument("--dashed", action="store_true"); s.add_argument("--solid", action="store_true")
     mm = sub.add_parser("mermaid"); mm.add_argument("file"); mm.add_argument("src", nargs="?", default="-"); mm.add_argument("--at"); mm.add_argument("--layer"); mm.add_argument("--elbow", action="store_true")
+    im = sub.add_parser("image"); im.add_argument("file"); im.add_argument("src"); im.add_argument("--at"); im.add_argument("--w", type=float); im.add_argument("--layer")
     ro = sub.add_parser("rotate"); ro.add_argument("file"); ro.add_argument("ids", nargs="+"); ro.add_argument("deg", type=float)
     a.add_argument("--angle", type=float, default=0, help="degrees, clockwise")
     rm = sub.add_parser("rm"); rm.add_argument("file"); rm.add_argument("ids", nargs="+")
@@ -282,7 +331,7 @@ def main():
             print(json.dumps(rows, indent=1))
         else:
             for d in rows:
-                extra = " ".join(f"{k}={json.dumps(d[k])}" for k in ("label", "text", "from", "to", "color") if k in d)
+                extra = " ".join(f"{k}={json.dumps(d[k])}" for k in ("label", "text", "from", "to", "color", "image") if k in d)
                 print(f'{d["id"]:<16} {d["type"]:<10} at {d["x"]},{d["y"]} {d["w"]}x{d["h"]} {extra}'.rstrip())
             if not rows:
                 print("(empty)")
@@ -417,6 +466,24 @@ def main():
             e["customData"] = {**e.get("customData", {}), "layer": lid, "z": top + 1 + z}
             scene["elements"].append(e)
         out = "\n".join(e["id"] for e in els if not (e["type"] == "text" and e.get("containerId")))
+    elif args.cmd == "image":
+        mime, data = read_image(os.path.expanduser(args.src))
+        fid = hashlib.sha1(data).hexdigest()   # Excalidraw's ids are content hashes too: one picture, one file
+        w, h = image_size(data) or (400, 300)
+        if args.w:
+            w, h = args.w, h * args.w / w
+        boxes = [e for e in live(scene) if not (e["type"] == "text" and e.get("containerId"))]
+        if args.at:
+            x, y = pair(args.at, "--at")
+        else:   # below whatever is already there
+            x = min([e["x"] for e in boxes] or [0]); y = max([e["y"] + e["height"] for e in boxes] or [-80]) + 80
+        scene.setdefault("files", {})
+        if fid not in scene["files"]:
+            scene["files"][fid] = {"id": fid, "mimeType": mime, "dataURL": f"data:{mime};base64,{base64.b64encode(data).decode()}",
+                                   "created": int(time.time() * 1000)}
+        el = base("image", x=x, y=y, width=w, height=h, fileId=fid, status="saved", scale=[1, 1], crop=None,
+                  strokeColor="transparent", roughness=0)
+        place(scene, el, args.layer); out = el["id"]
     elif args.cmd == "rotate":
         da = math.radians(args.deg)
         for ref in args.ids:

@@ -31,7 +31,7 @@ Herdr-draw data lives where Excalidraw keeps foreign data: `customData.{layer,z,
 
 ## Dev loop
 
-- `bun test` (75 tests). `drawh mermaid` runs core/mermaid.js through node (or bun), so agents and the pane lay out alike. Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
+- `bun test` (90 tests). `drawh mermaid` runs core/mermaid.js through node (or bun), so agents and the pane lay out alike. Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
 - `scripts/dev-sync.sh` builds `build/herdr-draw` (adapter + core + svg + drawh) and installs a **copy** into `~/.config/herdr-app/mods/herdr-draw`.
 - See the real window only with `herdr-app shot` (passive). **Never drive the person's mouse or keyboard** to test (theGrid input tools land in whatever app is focused).
 
@@ -64,4 +64,11 @@ sent only to that window's id; quit it by its pid when done.
 - Rotation: shapes and text keep `angle`; lines, arrows and pen strokes bake it into their points. Herdr can't rotate text, so text stays upright in the pane (SVG export rotates it).
 - Elbow arrows (`elbowed: true`) are routed from their ends every revision (cached per arrow per `doc.rev`) and baked into
   `points` on save. Excalidraw's own elbow arrows also carry `fixedPoint` bindings; opening our elbows in excalidraw.com is unverified.
+- Images: `image` elements point at `files[fileId]` (base64 data URLs, ids are SHA-1 of the bytes); ops carry an add-only `files` map.
+  `image()` loads only paths under `appHome()` (`$HERDR_APP_HOME` in a test window, not `home()`), so the pane decodes blobs into
+  `<appHome>/.cache/herdr-draw/img/` (base64 via a temp file, never argv). Like text, images can't rotate in the pane; they paint in
+  order between path batches, text still on top.
+- Herdr's `readTextFile` rejects files over **1 MiB** (verified live: a board with two photos wouldn't open, and the watch loop died).
+  All board I/O goes through `adapters/herdr/io.js`: big files are read with `cat` (exec caps output at 8 MiB, the board size limit)
+  and written as <1 MiB parts joined by `cat` + `mv`. The big write's stale check is read-then-rename, not atomic.
 - Writers other than the pane must bump `version` on every element they change (drawh does), or the pane may keep its copy.

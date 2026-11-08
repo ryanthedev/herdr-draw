@@ -4,9 +4,9 @@
 //
 // Open: pane.split {mod: "herdr-draw", props: {file}}. Agents use `drawh`.
 
-import { View, div, PathBuilder } from "gpui-kit";
+import { View, div, image, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
-import { props, exec, theme, settings, home, nextCommand, panes, readTextFile, writeTextFile, fonts } from "herdr";
+import { props, exec, theme, settings, home, appHome, nextCommand, panes, readTextFile, writeTextFile, fonts } from "herdr";
 import { Editor, TOOLS, STROKES, FILLS, WIDTHS, STYLES } from "./core/editor.js";
 import { withAlpha, paintScene } from "./core/render.js";
 import { PRESET_NAMES } from "./core/anim.js";
@@ -14,6 +14,7 @@ import { FONT_FAMILY } from "./core/style.js";
 import { isShape, isLabel, layerOf } from "./core/model.js";
 import { toSvg } from "./svg.js";
 import { FileStore } from "./store.js";
+import { writeText } from "./io.js";
 
 const MOD = "herdr-draw";
 const Z = () => Number(settings().zoom) || 1;
@@ -21,6 +22,42 @@ const CACHE = () => `${home()}/.cache/herdr-draw`;
 const SIDEBAR = 232;
 const ALIGN = [["left", "⇤"], ["hcenter", "↔"], ["right", "⇥"], ["top", "⤒"], ["vcenter", "↕"], ["bottom", "⤓"]];
 const CLEAR = "#00000000";
+// image() loads only paths under the app home (~/.config/herdr-app or $HERDR_APP_HOME), so
+// board images are decoded into a hidden cache there: outside the mod folder (no hot reload,
+// and a dev sync's rsync --delete doesn't wipe it).
+const IMG_REL = ".cache/herdr-draw/img";
+const IMG_DIR = () => `${appHome()}/${IMG_REL}`;
+const MIME_EXT = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp", "image/svg+xml": "svg" };
+const IMAGE_FILE = /\.(png|jpe?g|gif|webp|svg|heic|heif|tiff?|bmp)$/i;
+// Cache names come from file ids, and a board's ids are untrusted: keep them to safe characters.
+const cacheName = (id, mime) => `${String(id).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80)}.${MIME_EXT[mime] ?? "png"}`;
+
+// One file → { id, mimeType, width, height, dataURL }. Formats GPUI or Excalidraw may not
+// take (HEIC, TIFF…) become PNG, and anything over 2 MB becomes a JPEG at most 2000 px, so the
+// base64 fits exec's 8 MiB output. The id is the SHA-1 of the bytes, as Excalidraw's are.
+// The file is copied into the image cache under its final name, so it never needs decoding.
+const IMPORT_SH = `set -e
+src="$1"; dir="$2"; mkdir -p "$dir"
+ext=$(printf %s "\${src##*.}" | tr A-Z a-z)
+case "$ext" in png) m=image/png;; jpg|jpeg) m=image/jpeg;; gif) m=image/gif;; webp) m=image/webp;; svg) m=image/svg+xml;; *) m=;; esac
+size=$(stat -f %z "$src")
+work="$src"
+if [ "$m" != image/svg+xml ] && { [ -z "$m" ] || [ "$size" -gt 2000000 ]; }; then
+  if [ "$size" -gt 2000000 ]; then work="$dir/import-$$.jpg"; m=image/jpeg; sips -s format jpeg -s formatOptions 85 -Z 2000 "$src" --out "$work" >/dev/null
+  else work="$dir/import-$$.png"; m=image/png; sips -s format png "$src" --out "$work" >/dev/null; fi
+fi
+id=$(shasum -a 1 < "$work" | cut -c1-40)
+case "$m" in image/png) e=png;; image/jpeg) e=jpg;; image/gif) e=gif;; image/webp) e=webp;; *) e=svg;; esac
+cp "$work" "$dir/$id.$e"
+dims=$(sips -g pixelWidth -g pixelHeight "$work" 2>/dev/null | awk '/pixel(Width|Height)/{printf "%s ", $2}')
+printf '%s\n%s\n%s\n' "$id" "$m" "$dims"
+base64 < "$work" | tr -d '\n'
+if [ "$work" != "$src" ]; then rm -f "$work"; fi`;
+
+// The clipboard's image (a screenshot, a copied picture) as a PNG file; prints its path.
+const CLIP_SH = `out="$1"; mkdir -p "$(dirname "$out")"; rm -f "$out"
+osascript -e 'on run argv' -e 'set f to open for access (POSIX file (item 1 of argv)) with write permission' -e 'set eof f to 0' -e 'write (the clipboard as «class PNGf») to f' -e 'close access f' -e 'end run' "$out" >/dev/null 2>&1
+[ -s "$out" ] && printf %s "$out"`;
 
 export default class Draw extends View {
   init(_props, cx) {
@@ -33,6 +70,7 @@ export default class Draw extends View {
     this.flash = null; this.sidebar = p.sidebar ?? true; this.selKey = "";
     this.tick = null; this.size = { w: 900, h: 600 }; this.measured = false;   // a default size so panels render before layout this.textOpen = false; this.renaming = null;
     this.handle = cx.focus_handle();
+    this.imgs = new Map();   // file id → cache path (relative to the app home) once decoded; "pending" / "failed"
     // Multi-line: a submit with ⌘ (or any submit, if Enter submits) commits; Escape or a click outside commits too.
     this.input = TextareaState.new({ value: "", placeholder: "Type… (Esc or ⌘⏎ to finish)", rows: 1 });
     this.input.set_auto_grow?.(1, 10);
@@ -52,7 +90,7 @@ export default class Draw extends View {
     if (this.file) {
       this.store = new FileStore(this.file, this.ed, {
         onError: m => { this.error = m; },
-        onExternal: n => { this.flash = `${n} change${n === 1 ? "" : "s"} from the file`; },
+        onExternal: n => { this.error = null; this.flash = `${n} change${n === 1 ? "" : "s"} from the file`; },
       });
       cx.spawn(async acx => { await this.store.start(acx); this.fitted = false; this.maybeFit(); acx.notify(); });
     }
@@ -137,7 +175,15 @@ export default class Draw extends View {
       cx.stop_propagation(); return this.after(cx);
     }
     if (!ed.text && m.platform && e.key === "v") {
-      cx.spawn(async cx => { const r = await exec("sh", ["-c", "LANG=en_US.UTF-8 pbpaste"]); ed.paste(r.stdout ?? ""); this.after(cx); });
+      cx.spawn(async cx => {
+        const r = await exec("sh", ["-c", "LANG=en_US.UTF-8 pbpaste"]);
+        if ((r.stdout ?? "").trim()) ed.paste(r.stdout);
+        else {   // no text: maybe a picture (pbpaste only gives text)
+          const c = await exec("sh", ["-c", CLIP_SH, "img-clip", `${IMG_DIR()}/clip-${Date.now()}.png`]);
+          if (c.code === 0 && c.stdout) await this.importImages([c.stdout.trim()], true);
+        }
+        this.after(cx);
+      });
       cx.stop_propagation(); return;
     }
     if (!ed.text && m.platform && m.shift && e.key === "e") { this.exportSvg(); cx.stop_propagation(); return this.after(cx); }
@@ -145,9 +191,55 @@ export default class Draw extends View {
     if (ed.key(e.key, mm)) { cx.stop_propagation(); this.after(cx); }
   }
 
+  // Image files onto the board (dropped, pasted), side by side around the view's center.
+  async importImages(paths, removeAfter = false) {
+    const ed = this.ed, c = ed.toWorld({ x: this.size.w / 2, y: this.size.h / 2 }), ids = [];
+    for (const [i, p] of paths.entries()) {
+      const r = await exec("sh", ["-c", IMPORT_SH, "img-import", p, IMG_DIR()]);
+      if (removeAfter) exec("rm", ["-f", p]);
+      const [id, mimeType, dims, b64] = (r.stdout ?? "").split("\n");
+      if (r.code !== 0 || !/^[0-9a-f]{40}$/.test(id ?? "") || !b64) { this.flash = `Can't import ${p.split("/").pop()}`; continue; }
+      const [width, height] = (dims ?? "").trim().split(/\s+/).map(Number);
+      this.imgs.set(id, `${IMG_REL}/${cacheName(id, mimeType)}`);
+      ids.push(ed.addImage({ id, mimeType, dataURL: `data:${mimeType};base64,${b64}`, width: width || 400, height: height || 300 }, { x: c.x + i * 30, y: c.y + i * 30 }));
+    }
+    if (ids.length > 1) ed.select(ids);
+  }
+
+  // Board images (opened, merged from drawh or a peer) decoded into the cache image() reads.
+  // The base64 goes through a temp file: as an argument it could pass macOS's ~1 MB argv limit.
+  ensureImages(cx) {
+    const files = this.ed.doc.files, todo = Object.keys(files).filter(id => !this.imgs.has(id));
+    if (!todo.length) return;
+    for (const id of todo) this.imgs.set(id, "pending");
+    cx.spawn(async cx => {
+      await exec("mkdir", ["-p", IMG_DIR()]);
+      for (const id of todo) {
+        const f = files[id], m = /^data:(image\/[a-z+]+);base64,([A-Za-z0-9+/=]+)$/.exec(f?.dataURL ?? "");
+        if (!m || !MIME_EXT[m[1]]) { this.imgs.set(id, "failed"); continue; }
+        const name = cacheName(id, m[1]), out = `${IMG_DIR()}/${name}`;
+        try {
+          if ((await exec("test", ["-s", out])).code !== 0) {
+            const tmp = `${out}.${Date.now()}.b64`;
+            await writeText(tmp, m[2], null);
+            const r = await exec("sh", ["-c", 'base64 -D < "$1" > "$2.part" && mv "$2.part" "$2"; s=$?; rm -f "$1"; exit $s', "img-cache", tmp, out]);
+            if (r.code !== 0) throw new Error(r.stderr || "base64 failed");
+          }
+          this.imgs.set(id, `${IMG_REL}/${name}`);
+        } catch { this.imgs.set(id, "failed"); }
+        cx.notify();
+      }
+    });
+  }
+
   canvasEvents(el) {
     const ed = this.ed;
     return el
+      .on_drop((e, cx) => {
+        const paths = (e?.paths ?? []).filter(p => IMAGE_FILE.test(p));
+        if (!paths.length) { this.flash = "only images can be dropped here"; return this.after(cx); }
+        cx.spawn(async cx => { await this.importImages(paths); this.after(cx); });
+      })
       .on_size_change((size, cx) => {
         const z = Z(), w = size.width / z, h = size.height / z;
         if (Math.abs(w - this.size.w) > 1 || Math.abs(h - this.size.h) > 1) { this.size = { w, h }; this.measured = true; ed.setSize(w, h); this.maybeFit(); cx.notify(); }
@@ -165,7 +257,7 @@ export default class Draw extends View {
   exportSvg() {
     const ed = this.ed, pal = this.palette(), saved = { view: { ...ed.view }, size: { ...ed.size } };
     ed.size = { w: 1600, h: 1000 }; ed.fit(undefined, 40);
-    const svg = toSvg(paintScene(ed.doc, ed.view, pal), { width: 1600, height: 1000, background: pal.bg });
+    const svg = toSvg(paintScene(ed.doc, ed.view, pal), { width: 1600, height: 1000, background: pal.bg, files: ed.doc.files });
     ed.view = saved.view; ed.size = saved.size; ed.changed();
     const out = this.file.replace(/\.excalidraw(\.json)?$/, "") + ".svg";
     // Not through a shell argument: a big board's SVG passes macOS's ~1 MB argv limit.
@@ -190,6 +282,7 @@ export default class Draw extends View {
 
   render(cx) {
     const t = theme();
+    this.ensureImages(cx);
     const showSide = this.sidebar && this.size.w > 360;
     return v_flex().id("draw").size_full().min_h(0).bg(t.background).text_color(t.foreground)
       .track_focus(this.handle).on_key_down((e, cx) => this.keys(e, cx))
@@ -232,6 +325,8 @@ export default class Draw extends View {
     let cur = null;
     for (const it of items) {
       if (it.t === "text") { cur = null; texts.push(it); continue; }
+      // Images sit in paint order between path batches (text still paints above everything).
+      if (it.t === "image") { cur = null; layers.push({ img: it, n: 1 }); continue; }
       const color = withAlpha(it.fill ?? it.stroke, it.opacity ?? 1);
       const key = it.fill ? `f|${color}` : `s|${color}|${it.width}|${it.dash?.join(",") ?? ""}`;
       if (!cur || cur.key !== key) {
@@ -254,10 +349,18 @@ export default class Draw extends View {
     let el = div().id("draw-canvas").flex_1().min_w(0).h_full().relative().overflow_hidden();
     if (tool === "hand") el = el.cursor_grab(); else if (tool !== "select") el = el.cursor_crosshair();
     return this.canvasEvents(el)
-      .children(layers.filter(l => l.n).map(l => div().absolute().top(0).left(0).size_full().child(window.paint_path(l.b.build(), l.color))))
+      .children(layers.filter(l => l.n).map(l => l.img ? this.imageItem(l.img, t) : div().absolute().top(0).left(0).size_full().child(window.paint_path(l.b.build(), l.color))))
       .children(texts.map(it => this.textItem(it, t)))
       .when(!this.ed.doc.live().length && !this.error, e => e.child(this.emptyHint(t)))
       .when(!!this.ed.text, e => e.child(this.textInput(t)));
+  }
+
+  // GPUI can't rotate an image: like text, it stays upright here (SVG export turns it).
+  imageItem(it, t) {
+    const path = this.imgs.get(it.fileId), box = div().absolute().left(it.x).top(it.y).w(it.w).h(it.h);
+    if (path && path !== "pending" && path !== "failed") return box.child(image(path).size_full().opacity(Math.max(0, Math.min(1, it.opacity ?? 1))));
+    return box.border(1).border_color(t.border).bg(withAlpha(t.dim, 0.12)).flex().items_center().justify_center()
+      .child(div().text_size(11).text_color(t.dim).child(path === "failed" ? "image unavailable" : "loading image…"));
   }
 
   textItem(it, t) {
@@ -282,6 +385,7 @@ export default class Draw extends View {
         .child(div().text_size(16).text_color(t.muted).child("Empty board"))
         .child(div().child("r ▭   d ◇   o ◯   a →   l ╱   p ✎   t T   f frame   e eraser   k laser"))
         .child(div().child("double-click to write · drag empty space to select · ⌘Z undo · i panels"))
+        .child(div().child("drop or paste an image to put it on the board"))
         .child(div().child("agents: drawh add / arrow / ls / sel")));
   }
 

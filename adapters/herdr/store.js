@@ -2,7 +2,8 @@
 // The port it fills is small on purpose — { start(cx), schedule(cx) } — so a
 // network transport can sit beside it (or replace it) without touching the editor.
 
-import { readTextFile, writeTextFile, watchFolder } from "herdr";
+import { watchFolder } from "herdr";
+import { readText as readTextFile, writeText as writeTextFile } from "./io.js";   // any size (Herdr's own stop at 1 MiB)
 import { emptyScene } from "./core/model.js";
 
 const SAVE_DELAY = 250;
@@ -66,7 +67,9 @@ export class FileStore {
       for (;;) {
         const changed = await watchFolder(dir);
         if (!changed.some(p => p.endsWith("/" + base) || p === this.file || p.endsWith(dir) || p.endsWith(dir.slice(0, -1)))) continue;
-        const text = await readTextFile(this.file);
+        // One bad read must not end live updates for good: report it and keep watching.
+        let text;
+        try { text = await readTextFile(this.file); } catch (e) { this.onError(`Can't read ${this.file}: ${e?.message ?? e}`); cx.notify(); continue; }
         if (text === null || text === this.disk) continue;        // our own write
         if (this.ed.g) { this.pending = text; continue; }        // mid-gesture: after release
         this.absorb(text, cx);

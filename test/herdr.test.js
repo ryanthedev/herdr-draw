@@ -1,6 +1,6 @@
 // The real Herdr adapter, driven headless: built mod + fake GPUI + synthetic mouse/keys.
 import { test, expect, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { installFakes, makeCx, byId, find, textOf, canvasToSvg, THEME } from "./harness/gpui-fake.js";
 import { rasterize, closeRaster } from "./harness/raster.js";
@@ -41,7 +41,7 @@ async function open(size = { width: 1100, height: 700 }) {
     click(id) { ui.fire(id, "on_click", ui.ev(0, 0)); },
     async shot(name) {
       const c = ui.canvas();
-      const svg = canvasToSvg(c, { width: view.size.w, height: view.size.h, bg: THEME.background });
+      const svg = canvasToSvg(c, { width: view.size.w, height: view.size.h, bg: THEME.background, root: home });
       await rasterize(svg, `${ROOT}test/out/${name}.png`, { width: Math.round(view.size.w), height: Math.round(view.size.h) });
     },
     disk: () => JSON.parse(readFileSync(file, "utf8")),
@@ -188,4 +188,84 @@ test("screenshot of the adapter's own canvas output", async () => {
   await ui.shot("herdr-canvas");
   expect(find(ui.canvas(), n => n.kind === "path")).toBeTruthy();
   expect(textOf(ui.canvas())).toContain("Browser");
+});
+
+// ── images ─────────────────────────────────────────────────────────────────
+const TINY = `${ROOT}test/fixtures/tiny.png`;
+const IMG_DIR = `${home}/.cache/herdr-draw/img`;
+// Let the image shell scripts really run (sips, shasum, base64); everything else stays recorded only.
+const realImages = () => { calls.real = (cmd, args) => ["mkdir", "test", "rm", "stat", "cat"].includes(cmd) || (cmd === "sh" && ["img-import", "img-cache", "big-write"].includes(args[2])); };
+
+test("dropping a PNG puts it on the board, cached where image() can load it, and saved in the file", async () => {
+  realImages();
+  const ui = await open();
+  ui.key("a", { platform: true }); ui.key("backspace");
+  ui.on("on_drop", { paths: [TINY] });
+  await ui.cx.flush();
+  const img = ui.view.ed.doc.visible().find(e => e.type === "image");
+  const sha = new Bun.CryptoHasher("sha1").update(readFileSync(TINY)).digest("hex");
+  expect(img.fileId).toBe(sha);
+  expect([img.width, img.height]).toEqual([8, 4]);   // natural size, from sips
+  expect(readFileSync(`${IMG_DIR}/${sha}.png`).equals(readFileSync(TINY))).toBe(true);
+  const node = find(ui.canvas(), n => n.kind === "image");
+  expect(node.path).toBe(`.cache/herdr-draw/img/${sha}.png`);
+  await ui.cx.flush();   // the save timer
+  expect(ui.disk().files[sha].dataURL).toStartWith("data:image/png;base64,iVBOR");
+});
+
+test("dropping something that isn't an image says so and adds nothing", async () => {
+  const ui = await open();
+  const n = ui.view.ed.doc.live().length;
+  ui.on("on_drop", { paths: ["/tmp/notes.txt"] });
+  expect(ui.view.ed.doc.live().length).toBe(n);
+  expect(textOf(ui.tree())).toContain("only images");
+});
+
+test("an image written by someone else (drawh, a peer) is decoded into the cache and shown", async () => {
+  realImages();
+  const b64 = readFileSync(TINY).toString("base64");
+  const scene = { type: "excalidraw", version: 2, elements: [
+    { id: "pic", type: "image", fileId: "agent/../pic", x: 100, y: 100, width: 320, height: 160, angle: 0, opacity: 100, version: 3, versionNonce: 1, isDeleted: false, strokeColor: "transparent", backgroundColor: "transparent", customData: { layer: "base", z: 1 } },
+    { id: "r1", type: "rectangle", x: 380, y: 140, width: 120, height: 80, angle: 0, opacity: 100, version: 3, versionNonce: 1, isDeleted: false, strokeColor: "#1e1e1e", backgroundColor: "transparent", strokeWidth: 2, roughness: 1, seed: 5, customData: { layer: "base", z: 2 } },
+  ], appState: {}, files: { "agent/../pic": { id: "agent/../pic", mimeType: "image/png", dataURL: `data:image/png;base64,${b64}` } } };
+  writeFileSync(file, JSON.stringify(scene));
+  const ui = await open();
+  ui.tree(); await ui.cx.flush();          // render asks for the decode; the spawn runs it
+  const node = find(ui.canvas(), n => n.kind === "image");
+  expect(node.path).toBe(".cache/herdr-draw/img/agent____pic.png");   // an untrusted id can't climb out of the cache
+  expect(readFileSync(`${home}/${node.path}`).equals(readFileSync(TINY))).toBe(true);
+  expect(readdirSync(IMG_DIR).filter(f => f.endsWith(".b64"))).toEqual([]);   // the temp base64 is gone
+  await ui.shot("herdr-image");
+});
+
+test("a board over 1 MiB (a few photos) opens, saves, and still takes an agent's write", async () => {
+  realImages();
+  // ~2.4 MB of base64: past readTextFile's 1 MiB, inside exec's 8 MiB. Labels in UTF-8 too.
+  const big = Buffer.alloc(1_800_000, 7).toString("base64");
+  const scene = { type: "excalidraw", version: 2, elements: [
+    { id: "photo", type: "image", fileId: "bigpic", x: 0, y: 0, width: 300, height: 200, angle: 0, opacity: 100, version: 2, versionNonce: 1, isDeleted: false, strokeColor: "transparent", backgroundColor: "transparent", customData: { layer: "base", z: 1 } },
+    { id: "t1", type: "text", text: "café ✓ 日本 🎨", x: 0, y: 260, width: 200, height: 25, fontSize: 20, angle: 0, opacity: 100, version: 2, versionNonce: 1, isDeleted: false, strokeColor: "#1e1e1e", backgroundColor: "transparent", customData: { layer: "base", z: 2 } },
+  ], appState: {}, files: { bigpic: { id: "bigpic", mimeType: "image/png", dataURL: `data:image/png;base64,${big}` } } };
+  writeFileSync(file, JSON.stringify(scene));
+  const ui = await open();
+  expect(ui.view.error).toBeNull();
+  expect(ui.view.ed.doc.get("t1").text).toBe("café ✓ 日本 🎨");
+  // An edit saves the whole board back through the big path.
+  ui.key("r"); ui.drag([500, 300], [600, 380]);
+  await ui.cx.flush();
+  const disk = ui.disk();
+  expect(disk.elements.some(e => e.type === "rectangle")).toBe(true);
+  expect(disk.files.bigpic.dataURL.length).toBe(big.length + 22);
+  expect(disk.elements.find(e => e.id === "t1").text).toBe("café ✓ 日本 🎨");
+  expect(readdirSync(`${home}/.cache/herdr-draw/tmp`)).toEqual([]);          // parts cleaned up
+  expect(calls.exec.some(c => c[0] === "cat" && c[1] === file)).toBe(true);   // read past 1 MiB
+  expect(calls.exec.some(c => c[0] === "sh" && c[3] === "big-write")).toBe(true);
+  // An agent writes meanwhile: the next save finds the file stale, merges, and keeps both.
+  const theirs = ui.disk(); theirs.elements.find(e => e.id === "t1").x = 900; theirs.elements.find(e => e.id === "t1").version = 50;
+  writeFileSync(file, JSON.stringify(theirs));
+  ui.key("o"); ui.drag([700, 300], [780, 380]);
+  await ui.cx.flush();
+  const after = ui.disk();
+  expect(after.elements.find(e => e.id === "t1").x).toBe(900);
+  expect(after.elements.some(e => e.type === "ellipse")).toBe(true);
 });

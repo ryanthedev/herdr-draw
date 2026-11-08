@@ -66,6 +66,7 @@ export function installFakes({ file, home }) {
   mock.module("gpui-kit", () => ({
     View: class {},
     div: () => makeEl("div"),
+    image: path => makeEl("image", { path }),
     PathBuilder: { fill: () => new FakePath("fill"), stroke: w => new FakePath("stroke", w) },
   }));
   mock.module("gpui-base", () => ({
@@ -82,16 +83,33 @@ export function installFakes({ file, home }) {
     theme: () => THEME,
     settings: () => ({ zoom: 1 }),
     home: () => home,
+    appHome: () => home,
     panes: () => [],
     nextCommand: () => new Promise(() => {}),
     watchFolder: () => new Promise(() => {}),
-    readTextFile: async p => (existsSync(p) ? readFileSync(p, "utf8") : null),
+    // Herdr's limits, as seen live: readTextFile rejects files over 1 MiB. writeTextFile's limit
+    // isn't documented; the fake refuses over 1 MiB too, so nothing comes to rely on it.
+    readTextFile: async p => {
+      if (!existsSync(p)) return null;
+      const b = readFileSync(p);
+      if (b.length > 1048576) throw new Error("'herdr.readTextFile': Text file exceeds 1 MiB");
+      return b.toString("utf8");
+    },
     writeTextFile: async (p, text, expected) => {
+      if (Buffer.byteLength(text) > 1048576) throw new Error("fake: writeTextFile over 1 MiB");
       const cur = existsSync(p) ? readFileSync(p, "utf8") : null;
       if (cur !== expected) throw new Error("stale");
       mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, text); return null;
     },
-    exec: async (cmd, args) => { calls.exec.push([cmd, ...args]); return { stdout: "", stderr: "", code: 0 }; },
+    // Recorded, not run, unless a test opts a command in with calls.real(cmd, args) (never pbcopy &c.).
+    exec: async (cmd, args) => {
+      calls.exec.push([cmd, ...args]);
+      if (calls.real?.(cmd, args)) {
+        const r = Bun.spawnSync([cmd, ...args], { env: process.env });
+        return { stdout: r.stdout.toString(), stderr: r.stderr.toString(), code: r.exitCode };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    },
   }));
   return calls;
 }
@@ -147,7 +165,7 @@ export function textOf(node) {
 }
 
 // Paint the canvas node the way GPUI would: path layers, then absolutely placed text.
-export function canvasToSvg(canvas, { width, height, bg }) {
+export function canvasToSvg(canvas, { width, height, bg, root }) {
   const out = [`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">`, `<rect width="100%" height="100%" fill="${bg}"/>`];
   const color = c => (c?.length === 9 ? [c.slice(0, 7), parseInt(c.slice(7), 16) / 255] : [c, 1]);
   const f = n => n.toFixed(1);
@@ -160,6 +178,11 @@ export function canvasToSvg(canvas, { width, height, bg }) {
       return;
     }
     const x = ox + (n.style.left ?? 0), y = oy + (n.style.top ?? 0);
+    if (n.kind === "image") {   // fills its parent box; image() paths are relative to the app home
+      const abs = `${root}/${n.path}`, ext = n.path.split(".").pop();
+      if (root && existsSync(abs)) out.push(`<image href="data:image/${ext === "jpg" ? "jpeg" : ext};base64,${readFileSync(abs).toString("base64")}" x="${ox}" y="${oy}" width="${n.__w}" height="${n.__h}" preserveAspectRatio="none"/>`);
+      return;
+    }
     if (n.kind === "input") { out.push(`<rect x="${x}" y="${y}" width="160" height="28" fill="none" stroke="#5eead4"/><text x="${x + 6}" y="${y + 19}" fill="#e6e6e6" font-size="14" font-family="Helvetica">${n.state.value()}|</text>`); return; }
     if (n.style.text_size && n.children.every(c => typeof c === "object" && c.kind === "div" && c.children.every(k => typeof k !== "object"))) {
       const size = n.style.text_size, [c, o] = color(n.style.text_color ?? "#e6e6e6"), lines = n.children.map(textOf);
@@ -168,6 +191,7 @@ export function canvasToSvg(canvas, { width, height, bg }) {
       return;
     }
     for (const c of n.children) {
+      if (typeof c === "object" && c && c.kind === "image") { c.__w = n.style.w; c.__h = n.style.h; }
       if (typeof c === "object" && c && n.style.justify_center && n.style.h != null) { c.__boxW = n.style.w; c.style.top = (c.style.top ?? 0) + n.style.h / 2 - (c.style.text_size ?? 16) * 1.25 * c.children.length / 2; }
       walk(c, x, y);
     }

@@ -43,3 +43,24 @@ test("drawh rotate and --angle set Excalidraw angles the core reads", () => {
   expect(Math.round(r.angle * 180 / Math.PI)).toBe(45);
   expect(ed.doc.labelOf(r).angle).toBeCloseTo(r.angle, 9);
 });
+
+test("drawh image: an agent puts a picture on the board, file and all; same bytes, same id", () => {
+  const f = `${mkdtempSync(`${tmpdir()}/drawh-`)}/b.excalidraw`, png = `${ROOT}test/fixtures/tiny.png`;
+  drawh("add", f, "rect", "--at", "0,0", "--label", "Above");
+  const id = drawh("image", f, png, "--w", "160");
+  const scene = JSON.parse(readFileSync(f, "utf8"));
+  const img = scene.elements.find(e => e.id === id);
+  const sha = new Bun.CryptoHasher("sha1").update(readFileSync(png)).digest("hex");
+  expect(img).toMatchObject({ type: "image", fileId: sha, width: 160, height: 80, status: "saved" });
+  expect(img.y).toBeGreaterThanOrEqual(80);                                    // below what was there
+  expect(scene.files[sha]).toMatchObject({ id: sha, mimeType: "image/png" });
+  expect(Buffer.from(scene.files[sha].dataURL.split(",")[1], "base64").equals(readFileSync(png))).toBe(true);
+  // The pane reads it as an image with its pixels.
+  const ed = new Editor({ scene });
+  expect(ed.displayList({ fg: "#fff", bg: "#000", accent: "#0ff", dim: "#888" }).some(i => i.t === "image" && i.fileId === sha)).toBe(true);
+  // The same picture twice shares one file.
+  drawh("image", f, png, "--at", "300,0");
+  const again = JSON.parse(readFileSync(f, "utf8"));
+  expect(Object.keys(again.files)).toEqual([sha]);
+  expect(() => drawh("image", f, `${ROOT}README.md`)).toThrow();
+});
