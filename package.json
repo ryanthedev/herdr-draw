@@ -1,0 +1,11 @@
+{
+  "name": "herdr-draw",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.65.0"
+  }
+}

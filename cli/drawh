@@ -1,0 +1,391 @@
+#!/usr/bin/env python3
+"""drawh: drive the Herdr whiteboard (herdr-draw) from a shell. Built for agents.
+
+The board is an .excalidraw file; the pane watches it and redraws on every change.
+Coordinates are scene pixels, x right, y down. Shapes are 140x80 unless --w/--h.
+
+  drawh open FILE [--down]                      open FILE in a pane beside the focused one (creates it)
+  drawh ls FILE [--json]                        list elements: id, type, box, label, arrow ends
+  drawh add FILE rect|ellipse|diamond --at X,Y [--w W --h H] [--label TEXT] [--id ID]
+            [--color red|green|blue|orange|purple|default] [--fill red|green|blue|yellow|purple]
+            [--dashed]                          add a shape; prints its id
+  drawh text FILE --at X,Y TEXT [--size 20] [--color C]
+  drawh arrow FILE FROM TO [--label TEXT] [--line] [--dashed] [--color C]
+                                                connect two element ids (or labels); the pane routes it
+  drawh label FILE ID TEXT                      set or replace a shape's label
+  drawh move FILE ID --at X,Y | --by DX,DY
+  drawh style FILE ID [--color C] [--fill C|none] [--dashed|--solid]
+  drawh rm FILE ID...                           delete elements (and their labels)
+  drawh clear FILE                              delete everything
+  drawh grid FILE LABEL... [--cols N] [--kind rect] [--gap 60]
+                                                lay out labeled shapes in a grid; prints ids
+  drawh layers FILE                             list layers (bottom first)
+  drawh layer FILE NAME [--hide|--show|--lock|--unlock|--opacity N]
+                                                create or change a layer; new elements go to it with --layer NAME
+  drawh animate FILE ID... --preset fade|rise|slide|pop|draw|pulse|out [--start MS] [--duration MS] [--stagger MS]
+                                                animate elements on the timeline (shift-space in the pane plays)
+  drawh play                                    play / pause the timeline in open boards
+  drawh fit                                     zoom every open board to fit its drawing
+  drawh sel                                     what the person has selected in the pane
+
+Shapes, text and grids take --layer NAME (created if missing).
+IDs: anywhere an ID is expected, a shape's exact label also works.
+"""
+import argparse, json, os, random, subprocess, sys, time
+
+CACHE = os.path.expanduser("~/.cache/herdr-draw")
+COLORS = {"default": "#1e1e1e", "black": "#1e1e1e", "red": "#e03131", "green": "#2f9e44", "blue": "#1971c2",
+          "orange": "#f08c00", "purple": "#9c36b5"}
+FILLS = {"none": "transparent", "red": "#ffc9c9", "green": "#b2f2bb", "blue": "#a5d8ff", "yellow": "#ffec99",
+         "purple": "#eebefa", "orange": "#ffd8a8"}
+KINDS = {"rect": "rectangle", "rectangle": "rectangle", "box": "rectangle", "ellipse": "ellipse",
+         "circle": "ellipse", "diamond": "diamond"}
+
+
+def die(msg):
+    sys.exit(f"drawh: {msg}")
+
+
+def rnd():
+    return random.randint(1, 2**31 - 1)
+
+
+def new_id():
+    return "%x%x" % (time.time_ns() // 1000, random.randint(0, 0xFFFF))
+
+
+def base(kind, **kw):
+    el = {"id": new_id(), "type": kind, "x": 0, "y": 0, "width": 0, "height": 0, "angle": 0,
+          "strokeColor": COLORS["default"], "backgroundColor": "transparent", "fillStyle": "solid",
+          "strokeWidth": 2, "strokeStyle": "solid", "roughness": 1, "opacity": 100, "groupIds": [],
+          "frameId": None, "roundness": None, "seed": rnd(), "version": 1, "versionNonce": rnd(),
+          "isDeleted": False, "boundElements": None, "updated": int(time.time() * 1000), "link": None,
+          "locked": False}
+    el.update(kw)
+    return el
+
+
+def text_el(text, x, y, size=20, container=None, color=COLORS["default"]):
+    lines = text.split("\n")
+    w, h = max(len(l) for l in lines) * size * 0.56, len(lines) * size * 1.25
+    return base("text", x=x, y=y, width=w, height=h, text=text, originalText=text, fontSize=size, fontFamily=1,
+                textAlign="center" if container else "left", verticalAlign="middle" if container else "top",
+                containerId=container, lineHeight=1.25, autoResize=True, baseline=int(size * 0.9),
+                strokeColor=color)
+
+
+def layers(scene):
+    h = scene.setdefault("appState", {}).setdefault("herdr", {})
+    if not h.get("layers"):
+        h["layers"] = [{"id": "base", "name": "Layer 1", "visible": True, "locked": False, "opacity": 100}]
+    return h["layers"]
+
+
+def layer_id(scene, name):
+    ls = layers(scene)
+    if not name:
+        return ls[-1]["id"]
+    for l in ls:
+        if l["name"] == name or l["id"] == name:
+            return l["id"]
+    l = {"id": new_id(), "name": name, "visible": True, "locked": False, "opacity": 100}
+    ls.append(l)
+    return l["id"]
+
+
+def place(scene, el, layer=None):
+    """Put el on a layer, on top of everything there."""
+    lid = layer_id(scene, layer)
+    top = max([e.get("customData", {}).get("z", 0) for e in live(scene) if e.get("customData", {}).get("layer", "base") == lid] or [0])
+    el["customData"] = {**el.get("customData", {}), "layer": lid, "z": top + 1}
+    scene["elements"].append(el)
+    return el
+
+
+def touch(el):
+    el["version"] = el.get("version", 1) + 1
+    el["versionNonce"] = rnd()
+    el["updated"] = int(time.time() * 1000)
+
+
+def load(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"type": "excalidraw", "version": 2, "source": "herdr-draw", "elements": [],
+                "appState": {"viewBackgroundColor": "#ffffff"}, "files": {}}
+    except ValueError as e:
+        die(f"{path} isn't valid JSON: {e}")
+
+
+def save(path, scene):
+    tmp = path + ".drawh.tmp"
+    with open(tmp, "w") as f:
+        json.dump(scene, f, indent=2)
+    os.replace(tmp, path)
+
+
+def live(scene):
+    return [e for e in scene["elements"] if not e.get("isDeleted")]
+
+
+def label_of(scene, el):
+    return next((e for e in live(scene) if e["type"] == "text" and e.get("containerId") == el["id"]), None)
+
+
+def find(scene, ref):
+    els = live(scene)
+    hit = next((e for e in els if e["id"] == ref), None)
+    if hit:
+        return hit
+    for e in els:
+        if e["type"] == "text" and e.get("text") == ref:
+            return next((c for c in els if c["id"] == e.get("containerId")), e)
+    die(f"no element with id or label {ref!r} (try: drawh ls FILE)")
+
+
+def pair(s, what):
+    try:
+        a, b = s.split(",")
+        return float(a), float(b)
+    except ValueError:
+        die(f"{what} must look like X,Y")
+
+
+def bound(el, eid, kind):
+    el["boundElements"] = [b for b in (el.get("boundElements") or []) if b["id"] != eid] + [{"id": eid, "type": kind}]
+
+
+def set_label(scene, shape, text):
+    old = label_of(scene, shape)
+    if old:
+        old["text"] = old["originalText"] = text
+        touch(old)
+        return old
+    t = text_el(text, shape["x"], shape["y"], container=shape["id"], color=shape["strokeColor"])
+    t["customData"] = dict(shape.get("customData", {}))
+    scene["elements"].append(t)
+    bound(shape, t["id"], "text")
+    touch(shape)
+    return t
+
+
+def center(el):
+    return el["x"] + el["width"] / 2, el["y"] + el["height"] / 2
+
+
+def describe(scene, e):
+    d = {"id": e["id"], "type": e["type"], "x": round(e["x"]), "y": round(e["y"]),
+         "w": round(e["width"]), "h": round(e["height"])}
+    lab = label_of(scene, e)
+    if lab:
+        d["label"] = lab["text"]
+    if e["type"] == "text":
+        d["text"] = e["text"]
+    for k, name in (("startBinding", "from"), ("endBinding", "to")):
+        if e.get(k):
+            d[name] = e[k]["elementId"]
+    if e.get("strokeColor") != COLORS["default"]:
+        d["color"] = e.get("strokeColor")
+    return d
+
+
+def main():
+    p = argparse.ArgumentParser(prog="drawh", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd", required=True)
+    o = sub.add_parser("open"); o.add_argument("file"); o.add_argument("--down", action="store_true")
+    l = sub.add_parser("ls"); l.add_argument("file"); l.add_argument("--json", action="store_true")
+    a = sub.add_parser("add"); a.add_argument("file"); a.add_argument("kind", choices=sorted(KINDS))
+    a.add_argument("--at", required=True); a.add_argument("--w", type=float, default=140); a.add_argument("--h", type=float, default=80)
+    a.add_argument("--label"); a.add_argument("--id"); a.add_argument("--color"); a.add_argument("--fill"); a.add_argument("--dashed", action="store_true")
+    t = sub.add_parser("text"); t.add_argument("file"); t.add_argument("text"); t.add_argument("--at", required=True)
+    t.add_argument("--size", type=int, default=20); t.add_argument("--color")
+    r = sub.add_parser("arrow"); r.add_argument("file"); r.add_argument("frm"); r.add_argument("to")
+    r.add_argument("--label"); r.add_argument("--line", action="store_true"); r.add_argument("--dashed", action="store_true"); r.add_argument("--color")
+    lb = sub.add_parser("label"); lb.add_argument("file"); lb.add_argument("id"); lb.add_argument("text")
+    m = sub.add_parser("move"); m.add_argument("file"); m.add_argument("id"); m.add_argument("--at"); m.add_argument("--by")
+    s = sub.add_parser("style"); s.add_argument("file"); s.add_argument("id"); s.add_argument("--color"); s.add_argument("--fill")
+    s.add_argument("--dashed", action="store_true"); s.add_argument("--solid", action="store_true")
+    rm = sub.add_parser("rm"); rm.add_argument("file"); rm.add_argument("ids", nargs="+")
+    c = sub.add_parser("clear"); c.add_argument("file")
+    g = sub.add_parser("grid"); g.add_argument("file"); g.add_argument("labels", nargs="+")
+    g.add_argument("--cols", type=int, default=3); g.add_argument("--kind", default="rect"); g.add_argument("--gap", type=float, default=60)
+    g.add_argument("--at", default="0,0"); g.add_argument("--w", type=float, default=160); g.add_argument("--h", type=float, default=80)
+    sub.add_parser("sel"); sub.add_parser("fit"); sub.add_parser("play")
+    ly = sub.add_parser("layers"); ly.add_argument("file")
+    l1 = sub.add_parser("layer"); l1.add_argument("file"); l1.add_argument("name")
+    for f in ("--hide", "--show", "--lock", "--unlock"): l1.add_argument(f, action="store_true")
+    l1.add_argument("--opacity", type=int)
+    an = sub.add_parser("animate"); an.add_argument("file"); an.add_argument("ids", nargs="+")
+    an.add_argument("--preset", default="rise", choices=["fade", "rise", "slide", "pop", "draw", "pulse", "out", "none"])
+    an.add_argument("--start", type=int); an.add_argument("--duration", type=int, default=600); an.add_argument("--stagger", type=int, default=150)
+    for sp in (a, t, g): sp.add_argument("--layer")
+    args = p.parse_args()
+
+    if args.cmd in ("fit", "play"):
+        r = subprocess.run(["herdr-app", "do", "herdr-draw." + args.cmd], capture_output=True, text=True)
+        sys.stderr.write(r.stderr); sys.exit(r.returncode)
+
+    if args.cmd == "sel":
+        try:
+            with open(os.path.join(CACHE, "selection.json")) as f:
+                print(json.dumps(json.load(f), indent=1))
+        except OSError:
+            die("nothing selected yet (click something in the pane)")
+        return
+
+    path = os.path.abspath(os.path.expanduser(args.file))
+    color = lambda c: COLORS.get(c, c) if c else None
+    fill = lambda c: FILLS.get(c, c) if c else None
+
+    if args.cmd == "open":
+        if not os.path.exists(path):
+            save(path, load(path))
+        spec = {"direction": "down" if args.down else "right", "mod": "herdr-draw", "props": {"file": path}}
+        r = subprocess.run(["herdr-app", "do", "pane.split", json.dumps(spec)], capture_output=True, text=True)
+        sys.stdout.write(r.stdout); sys.stderr.write(r.stderr); sys.exit(r.returncode)
+
+    scene = load(path)
+
+    if args.cmd == "ls":
+        rows = [describe(scene, e) for e in live(scene) if not (e["type"] == "text" and e.get("containerId"))]
+        if args.json:
+            print(json.dumps(rows, indent=1))
+        else:
+            for d in rows:
+                extra = " ".join(f"{k}={json.dumps(d[k])}" for k in ("label", "text", "from", "to", "color") if k in d)
+                print(f'{d["id"]:<16} {d["type"]:<10} at {d["x"]},{d["y"]} {d["w"]}x{d["h"]} {extra}'.rstrip())
+            if not rows:
+                print("(empty)")
+        return
+
+    out = None
+    if args.cmd == "add":
+        x, y = pair(args.at, "--at")
+        el = base(KINDS[args.kind], x=x, y=y, width=args.w, height=args.h)
+        if args.id:
+            el["id"] = args.id
+        if args.color: el["strokeColor"] = color(args.color)
+        if args.fill: el["backgroundColor"] = fill(args.fill)
+        if args.dashed: el["strokeStyle"] = "dashed"
+        place(scene, el, args.layer)
+        if args.label:
+            set_label(scene, el, args.label)
+        out = el["id"]
+    elif args.cmd == "text":
+        x, y = pair(args.at, "--at")
+        el = text_el(args.text, x, y, size=args.size, color=color(args.color) or COLORS["default"])
+        place(scene, el, args.layer); out = el["id"]
+    elif args.cmd == "arrow":
+        s, e = find(scene, args.frm), find(scene, args.to)
+        (sx, sy), (ex, ey) = center(s), center(e)
+        el = base("line" if args.line else "arrow", x=sx, y=sy, width=abs(ex - sx), height=abs(ey - sy),
+                  points=[[0, 0], [ex - sx, ey - sy]], lastCommittedPoint=None,
+                  startBinding={"elementId": s["id"], "focus": 0, "gap": 6},
+                  endBinding={"elementId": e["id"], "focus": 0, "gap": 6},
+                  startArrowhead=None, endArrowhead=None if args.line else "arrow")
+        if args.dashed: el["strokeStyle"] = "dashed"
+        if args.color: el["strokeColor"] = color(args.color)
+        lid = s.get("customData", {}).get("layer", "base")
+        place(scene, el, next((l["name"] for l in layers(scene) if l["id"] == lid), None))
+        for t_ in (s, e):
+            bound(t_, el["id"], "arrow"); touch(t_)
+        if args.label:
+            mx, my = (sx + ex) / 2, (sy + ey) / 2
+            scene["elements"].append(text_el(args.label, mx + 8, my - 26, size=16))
+        out = el["id"]
+    elif args.cmd == "label":
+        el = find(scene, args.id)
+        if el["type"] == "text":
+            el["text"] = el["originalText"] = args.text; touch(el)
+        else:
+            set_label(scene, el, args.text)
+        out = el["id"]
+    elif args.cmd == "move":
+        el = find(scene, args.id)
+        if args.at:
+            x, y = pair(args.at, "--at"); dx, dy = x - el["x"], y - el["y"]
+        elif args.by:
+            dx, dy = pair(args.by, "--by")
+        else:
+            die("move needs --at X,Y or --by DX,DY")
+        for t_ in [el, label_of(scene, el)]:
+            if t_:
+                t_["x"] += dx; t_["y"] += dy; touch(t_)
+        for a_ in live(scene):
+            if (a_.get("startBinding") or {}).get("elementId") == el["id"] or (a_.get("endBinding") or {}).get("elementId") == el["id"]:
+                touch(a_)
+        out = el["id"]
+    elif args.cmd == "style":
+        el = find(scene, args.id)
+        if args.color:
+            el["strokeColor"] = color(args.color)
+            lab = label_of(scene, el)
+            if lab: lab["strokeColor"] = el["strokeColor"]; touch(lab)
+        if args.fill: el["backgroundColor"] = fill(args.fill)
+        if args.dashed: el["strokeStyle"] = "dashed"
+        if args.solid: el["strokeStyle"] = "solid"
+        touch(el); out = el["id"]
+    elif args.cmd == "rm":
+        for ref in args.ids:
+            el = find(scene, ref)
+            for t_ in [el, label_of(scene, el)]:
+                if t_:
+                    t_["isDeleted"] = True; touch(t_)
+            for a_ in live(scene):
+                for k in ("startBinding", "endBinding"):
+                    if (a_.get(k) or {}).get("elementId") == el["id"]:
+                        a_[k] = None; touch(a_)
+    elif args.cmd == "layers":
+        counts = {}
+        for e in live(scene):
+            if not (e["type"] == "text" and e.get("containerId")):
+                k = e.get("customData", {}).get("layer", "base"); counts[k] = counts.get(k, 0) + 1
+        for l in layers(scene):
+            flags = ("" if l["visible"] else " hidden") + (" locked" if l["locked"] else "") + (f' {l["opacity"]}%' if l["opacity"] < 100 else "")
+            print(f'{l["id"]:<16} {l["name"]:<20} {counts.get(l["id"], 0)} elements{flags}')
+        return
+    elif args.cmd == "layer":
+        lid = layer_id(scene, args.name)
+        for l in layers(scene):
+            if l["id"] == lid:
+                if args.hide: l["visible"] = False
+                if args.show: l["visible"] = True
+                if args.lock: l["locked"] = True
+                if args.unlock: l["locked"] = False
+                if args.opacity is not None: l["opacity"] = max(0, min(100, args.opacity))
+        out = lid
+    elif args.cmd == "animate":
+        els = [find(scene, r) for r in args.ids]
+        if args.start is None:
+            ends = [(e.get("customData", {}).get("anim") or {}) for e in live(scene) if e not in els]
+            args.start = max([a.get("start", 0) + a.get("duration", 600) for a in ends if a and "start" in a] or [0])
+        t_ = args.start
+        for e in els:
+            for x in [e, label_of(scene, e)]:
+                if not x: continue
+                cd = dict(x.get("customData", {}))
+                if args.preset == "none": cd.pop("anim", None)
+                else: cd["anim"] = {"preset": args.preset, "start": t_, "duration": args.duration}
+                x["customData"] = cd; touch(x)
+            t_ += args.stagger
+    elif args.cmd == "clear":
+        for el in live(scene):
+            el["isDeleted"] = True; touch(el)
+    elif args.cmd == "grid":
+        x0, y0 = pair(args.at, "--at"); ids = []
+        for i, lab in enumerate(args.labels):
+            r_, c_ = divmod(i, args.cols)
+            el = base(KINDS.get(args.kind, "rectangle"), x=x0 + c_ * (args.w + args.gap), y=y0 + r_ * (args.h + args.gap),
+                      width=args.w, height=args.h)
+            place(scene, el, args.layer); set_label(scene, el, lab); ids.append(el["id"])
+        out = "\n".join(ids)
+
+    save(path, scene)
+    if out:
+        print(out)
+
+
+if __name__ == "__main__":
+    main()
