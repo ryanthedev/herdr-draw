@@ -20,9 +20,13 @@ Built so far (commit order):
    aspect-locked resize (shift frees), copy/paste with files, SVG export embeds them. Board I/O now handles files over 1 MiB
    (`adapters/herdr/io.js`): Herdr's `readTextFile` caps at 1 MiB, which photo boards pass at once.
 
-## Open issue outside this repo
+## Main Herdr window (updated by the first session, standing down)
 
-The person's **main Herdr window** has an exhausted mod runtime (`mod pane: out of memory`, `Null"null"` for herdr-draw, herdr-md, toast). The herdr-md session confirmed it; the person restarts Herdr when back. Until then the main window runs old builds. **Do not quit or restart the main window.** After the restart, reopen the board: `drawh open ~/boards/sketch.excalidraw`.
+Resolved: the person restarted Herdr; `herdr-app status` shows `errors: []`. The first session installed `f49bbe1` into
+`~/.config/herdr-app/mods/herdr-draw` (90 tests passing) and confirmed by screenshot that the board pane (pane id
+`pbfe66935efb0ec6f908de961d69de923`, in the herdr-md tab) loads it. Later commits (`30febc0` and on) are not installed yet:
+run `scripts/dev-sync.sh` from a clean tree. `herdr-app ls` doesn't list mod panes; `herdr-app do pane.focus {"pane": ID}` shows
+one without key presses (put the person's focus back afterwards).
 
 ## How to verify in real Herdr (never the person's window)
 
