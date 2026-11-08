@@ -17,6 +17,7 @@ import { paintScene, paintElement, project, rectCmds, withAlpha } from "./render
 import { PRESETS, timelineEnd } from "./anim.js";
 import { labelHostHeight } from "./text.js";
 import { isMermaid, mermaidToElements } from "./mermaid.js";
+import { itemFromElements } from "./library.js";
 
 export const TOOLS = [
   { id: "select", keys: ["v", "1"], icon: "↖", name: "Select" },
@@ -771,16 +772,25 @@ export class Editor {
       if (text && typeof text === "string") { const c = at ?? this.toWorld({ x: this.size.w / 2, y: this.size.h / 2 }); this.beginText(null, c); this.text.value = text; this.commitText(); }
       return;
     }
-    const els = data.elements.filter(e => !e.isDeleted), box = unionBox(els.filter(e => !isLabel(e)).map(bbox));
+    this.insertElements(data.elements, data.files, at);
+  }
+
+  // Elements from elsewhere (a clipboard, a library item) as new ones, centered at `at`, as one
+  // undo step: fresh ids, groups and bindings that point inside the set (others dropped), layer and z here.
+  // Returns the new ids, labels included; selects the new top-level elements.
+  insertElements(elements, files, at) {
+    const els = (elements ?? []).filter(e => e && !e.isDeleted); if (!els.length) return [];
+    if (files && typeof files === "object") this.addFiles(files);
+    const box = unionBox(els.filter(e => !isLabel(e)).map(bbox)) ?? unionBox(els.map(bbox));
     const target = at ?? this.toWorld({ x: this.size.w / 2, y: this.size.h / 2 });
     const dx = target.x - (box.x + box.w / 2), dy = target.y - (box.y + box.h / 2);
-    if (data.files && typeof data.files === "object") this.addFiles(data.files);
-    const idMap = new Map(els.map(e => [e.id, newId()])), z = this.doc.maxZ(this.activeLayer);
+    const idMap = new Map(els.map(e => [e.id, newId()])), groups = new Map(), z = this.doc.maxZ(this.activeLayer);
     const out = [];
     this.transact(tx => {
       els.forEach((e, i) => {
-        const c = clone(e); c.id = idMap.get(e.id); c.x += dx; c.y += dy; c.version = 0;
+        const c = clone(e); c.id = idMap.get(e.id); c.x += dx; c.y += dy; c.version = 0; c.isDeleted = false;
         if (c.containerId) c.containerId = idMap.get(c.containerId) ?? null;
+        c.groupIds = (c.groupIds ?? []).map(g => groups.get(g) ?? groups.set(g, newId()).get(g));
         c.boundElements = (c.boundElements ?? []).filter(b => idMap.has(b.id)).map(b => ({ ...b, id: idMap.get(b.id) }));
         for (const k of ["startBinding", "endBinding"]) if (c[k]) c[k] = idMap.has(c[k].elementId) ? { ...c[k], elementId: idMap.get(c[k].elementId) } : null;
         c.customData = { ...(c.customData ?? {}), layer: this.activeLayer, z: z + 1 + i };
@@ -788,7 +798,16 @@ export class Editor {
       });
     });
     this.select(out.filter(e => !isLabel(e)).map(e => e.id));
+    return out.map(e => e.id);
   }
+
+  // The selection as a library item (labels and picture files included); null if nothing is selected.
+  libraryItem(name) {
+    const els = this.selected().filter(e => !isLabel(e)); if (!els.length) return null;
+    const all = [...els]; for (const el of els) { const l = isShape(el) && this.doc.labelOf(el); if (l) all.push(l); }
+    return itemFromElements(all, { name, files: this.doc.files, now: this.clock() });
+  }
+  insertLibraryItem(item, at) { return this.insertElements(item?.elements, item?.files, at); }
 
   group() {
     const els = this.selected(); if (els.length < 2) return;
