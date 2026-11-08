@@ -403,7 +403,7 @@ def main():
     elif args.cmd == "mermaid":
         src = sys.stdin.read() if args.src == "-" else open(os.path.expanduser(args.src)).read()
         els = mermaid_elements(src)
-        boxes = [e for e in live(scene) if e["type"] != "text"]
+        boxes = [e for e in live(scene) if not (e["type"] == "text" and e.get("containerId"))]   # free text counts too
         if args.at:
             ox, oy = pair(args.at, "--at")
         else:   # below whatever is already there

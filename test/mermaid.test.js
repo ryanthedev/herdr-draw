@@ -94,11 +94,12 @@ test("drawh mermaid: stdin import lands below existing content, loads in the cor
   const f = `${mkdtempSync(`${tmpdir()}/drawh-`)}/b.excalidraw`;
   const run = (args, input) => { const r = Bun.spawnSync([`${ROOT}cli/drawh`, ...args], { stdin: input ? new TextEncoder().encode(input) : undefined }); if (r.exitCode) throw new Error(r.stderr.toString()); return r.stdout.toString(); };
   run(["add", f, "rect", "--at", "0,0"]);
+  run(["text", f, "a note\nthat is\ntall", "--at", "0,100"]);   // free text below the box: imports go below it too
   const ids = run(["mermaid", f], "graph TD\n  A[Plan] --> B[Ship]").trim().split("\n");
   expect(ids.length).toBe(3);
   const ed = new Editor({ scene: JSON.parse(readFileSync(f, "utf8")) });
   const plan = ed.doc.live().find(e => ed.doc.labelOf(e)?.text === "Plan");
-  expect(plan.y).toBeGreaterThanOrEqual(80 + 80);    // below the first box (0..80) plus the gap
+  expect(plan.y).toBeGreaterThanOrEqual(100 + 75 + 80);   // below the note (100..175) plus the gap
   const bad = Bun.spawnSync([`${ROOT}cli/drawh`, "mermaid", f], { stdin: new TextEncoder().encode("pie title x") });
   expect(bad.exitCode).not.toBe(0);
   expect(bad.stderr.toString()).toContain("not a Mermaid flowchart");
