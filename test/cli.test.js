@@ -64,3 +64,21 @@ test("drawh image: an agent puts a picture on the board, file and all; same byte
   expect(Object.keys(again.files)).toEqual([sha]);
   expect(() => drawh("image", f, `${ROOT}README.md`)).toThrow();
 });
+
+test("drawh export: a cropped 2x PNG (or --svg) without the pane, on the board's page color", () => {
+  const dir = mkdtempSync(`${tmpdir()}/drawh-`), f = `${dir}/b.excalidraw`;
+  drawh("add", f, "rect", "--at", "0,0", "--w", "200", "--h", "100", "--label", "Hi");
+  drawh("image", f, `${ROOT}test/fixtures/tiny.png`, "--at", "260,0", "--w", "80");
+  const png = drawh("export", f);
+  expect(png).toBe(`${dir}/b.png`);
+  const dims = Bun.spawnSync(["sips", "-g", "pixelWidth", "-g", "pixelHeight", png]).stdout.toString();
+  const svg = drawh("export", f, "--svg", "--out", `${dir}/x.svg`);
+  const s = readFileSync(svg, "utf8");
+  const [, vw, vh] = /viewBox="0 0 (\d+) (\d+)"/.exec(s).map(Number);
+  expect(+/pixelWidth: (\d+)/.exec(dims)[1]).toBe(vw * 2);
+  expect(+/pixelHeight: (\d+)/.exec(dims)[1]).toBe(vh * 2);
+  expect(vw).toBeGreaterThan(340); expect(vw).toBeLessThan(420);   // 340 wide + padding: cropped, not a fixed page
+  expect(s).toContain('fill="#ffffff"');
+  expect(s).toContain("<image href=\"data:image/png;base64,");
+  expect(readFileSync(drawh("export", f, "--svg", "--dark", "--out", `${dir}/d.svg`), "utf8")).toContain('fill="#121212"');
+});

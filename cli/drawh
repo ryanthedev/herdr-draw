@@ -19,6 +19,9 @@ Coordinates are scene pixels, x right, y down. Shapes are 140x80 unless --w/--h.
                                                 editable, laid-out shapes and bound arrows; prints the new ids
   drawh image FILE PATH [--at X,Y] [--w W]      put a picture (png, jpg, gif, webp, svg; others via sips) on the
                                                 board; natural size unless --w; below the drawing unless --at
+  drawh export FILE [--out PATH] [--svg] [--dark] [--scale 2]
+                                                the drawing, cropped, as a PNG (2x, via sips) or SVG; on the
+                                                board's page color (--dark: dark page); prints the path
   drawh rotate FILE ID... DEG                   turn elements by DEG degrees (clockwise) about their center
   drawh rm FILE ID...                           delete elements (and their labels)
   drawh clear FILE                              delete everything
@@ -171,6 +174,46 @@ def read_image(src):
         return "image/png", open(out, "rb").read()
 
 
+def core_dir():
+    here = os.path.dirname(os.path.realpath(__file__))
+    for c in (os.path.join(here, "core"), os.path.join(here, "..", "core")):
+        if os.path.exists(os.path.join(c, "export.js")):
+            return os.path.abspath(c)
+    die("can't find core/ next to drawh")
+
+
+def svg_module():
+    here = os.path.dirname(os.path.realpath(__file__))
+    for p in (os.path.join(here, "svg.js"), os.path.join(here, "..", "adapters", "svg", "svg.js")):
+        if os.path.exists(p):
+            return os.path.abspath(p)
+    die("can't find svg.js next to drawh")
+
+
+def run_js(script, stdin):
+    """Run an ES module snippet with node (or bun); stdout back. The board's own code, so agents and the pane agree."""
+    for runtime in (["node", "--input-type=module", "-e", script], ["bun", "-e", script]):
+        try:
+            r = subprocess.run(runtime, input=stdin, capture_output=True, text=True)
+        except FileNotFoundError:
+            continue
+        if r.returncode:
+            die(r.stderr.strip() or "export failed")
+        return r.stdout
+    die("needs node or bun on PATH")
+
+
+def export_svg(scene, scale, dark):
+    """The pane's export: core/export.js crops and paints, svg.js writes the SVG."""
+    script = ("import { exportScene, boardTheme, DARK } from %s; import { Doc } from %s; import { toSvg } from %s;"
+              "let s = ''; process.stdin.on('data', d => s += d); process.stdin.on('end', () => {"
+              " const doc = new Doc(JSON.parse(s)); const theme = %s ? DARK : boardTheme(doc.appState);"
+              " const x = exportScene(doc, theme, { scale: %s, maxPixels: 4096 }); process.stdout.write(toSvg(x.items, x)); });") % (
+        json.dumps("file://" + os.path.join(core_dir(), "export.js")), json.dumps("file://" + os.path.join(core_dir(), "doc.js")),
+        json.dumps("file://" + svg_module()), "true" if dark else "false", json.dumps(float(scale)))
+    return run_js(script, json.dumps(scene))
+
+
 def touch(el):
     el["version"] = el.get("version", 1) + 1
     el["versionNonce"] = rnd()
@@ -282,6 +325,8 @@ def main():
     s.add_argument("--dashed", action="store_true"); s.add_argument("--solid", action="store_true")
     mm = sub.add_parser("mermaid"); mm.add_argument("file"); mm.add_argument("src", nargs="?", default="-"); mm.add_argument("--at"); mm.add_argument("--layer"); mm.add_argument("--elbow", action="store_true")
     im = sub.add_parser("image"); im.add_argument("file"); im.add_argument("src"); im.add_argument("--at"); im.add_argument("--w", type=float); im.add_argument("--layer")
+    ex = sub.add_parser("export"); ex.add_argument("file"); ex.add_argument("--out"); ex.add_argument("--svg", action="store_true")
+    ex.add_argument("--dark", action="store_true"); ex.add_argument("--scale", type=float, default=2)
     ro = sub.add_parser("rotate"); ro.add_argument("file"); ro.add_argument("ids", nargs="+"); ro.add_argument("deg", type=float)
     a.add_argument("--angle", type=float, default=0, help="degrees, clockwise")
     rm = sub.add_parser("rm"); rm.add_argument("file"); rm.add_argument("ids", nargs="+")
@@ -324,6 +369,26 @@ def main():
         sys.stdout.write(r.stdout); sys.stderr.write(r.stderr); sys.exit(r.returncode)
 
     scene = load(path)
+
+    if args.cmd == "export":
+        if not os.path.exists(path):
+            die(f"no such board: {path}")
+        stem = path[:-len(".excalidraw")] if path.endswith(".excalidraw") else path
+        out = os.path.abspath(os.path.expanduser(args.out)) if args.out else stem + (".svg" if args.svg else ".png")
+        svg = export_svg(scene, 1 if args.svg else args.scale, args.dark)
+        if args.svg:
+            with open(out, "w") as f:
+                f.write(svg)
+        else:
+            with tempfile.TemporaryDirectory() as d:
+                src = os.path.join(d, "board.svg")
+                with open(src, "w") as f:
+                    f.write(svg)
+                r = subprocess.run(["sips", "-s", "format", "png", src, "--out", out], capture_output=True, text=True)
+                if r.returncode or not os.path.exists(out):
+                    die("sips couldn't make the PNG: " + (r.stderr.strip() or str(r.returncode)))
+        print(out)
+        return
 
     if args.cmd == "ls":
         rows = [describe(scene, e) for e in live(scene) if not (e["type"] == "text" and e.get("containerId"))]
