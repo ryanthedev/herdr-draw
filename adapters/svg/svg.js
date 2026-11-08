@@ -30,10 +30,13 @@ const FACES = {
 // (An SVG inside <image> can't run script.)
 const DATA_URL = /^data:image\/(?:png|jpeg|gif|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/;
 
-export function toSvg(items, { width, height, background, font = FACES.sans, files = {} } = {}) {
-  width = num(width, 800); height = num(height, 600); const base = esc(font);
-  const out = [`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`];
-  if (background) out.push(`<rect width="100%" height="100%" fill="${color(background)[0]}"/>`);
+// `scale`: pixels per unit. The viewBox stays in drawing units; only the pixel size grows.
+export function toSvg(items, { width, height, background, font = FACES.sans, files = {}, scale = 1 } = {}) {
+  width = num(width, 800); height = num(height, 600); scale = num(scale, 1) > 0 ? num(scale, 1) : 1; const base = esc(font ?? FACES.sans);
+  const px = v => +(v * scale).toFixed(2);
+  const out = [`<svg xmlns="http://www.w3.org/2000/svg" width="${px(width)}" height="${px(height)}" viewBox="0 0 ${width} ${height}">`];
+  // Explicit size, not 100%: sips takes a percentage of the pixel size and left a 2x PNG mostly black.
+  if (background) out.push(`<rect x="0" y="0" width="${width}" height="${height}" fill="${color(background)[0]}"/>`);
   for (let it of items) {
     const op = num(it.opacity, 1);
     if (it.t === "path") {

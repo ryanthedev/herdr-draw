@@ -4,6 +4,9 @@ import { emptyScene } from "../../core/model.js";
 import { toSvg } from "../../adapters/svg/svg.js";
 import { rasterize } from "./raster.js";
 
+// 8×4 PNG: left half red, right half blue (test/fixtures/tiny.png).
+export const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAIAAAA8r+mnAAAAFUlEQVR4nGP4b2AARwYJ/+GIgXoSABarLuG35VBkAAAAAElFTkSuQmCC";
+
 export const THEME = { fg: "#e6e6e6", bg: "#0b0f10", accent: "#5eead4", dim: "#6b7280" };
 
 export function setup({ scene = emptyScene(), w = 900, h = 600 } = {}) {

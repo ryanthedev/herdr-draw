@@ -1,6 +1,6 @@
 // Images: Excalidraw `image` elements whose pixels live in the board's `files`.
 import { test, expect, afterAll } from "bun:test";
-import { setup, THEME } from "./harness/fixture.js";
+import { setup, THEME, PNG } from "./harness/fixture.js";
 import { closeRaster } from "./harness/raster.js";
 import { Doc } from "../core/doc.js";
 import { Editor } from "../core/editor.js";
@@ -9,8 +9,7 @@ import { toSvg } from "../adapters/svg/svg.js";
 
 afterAll(closeRaster);
 
-// 8×4 PNG: left half red, right half blue (test/fixtures/tiny.png).
-export const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAIAAAA8r+mnAAAAFUlEQVR4nGP4b2AARwYJ/+GIgXoSABarLuG35VBkAAAAAElFTkSuQmCC";
+
 const FILE = { id: "f1", mimeType: "image/png", dataURL: PNG, width: 80, height: 40 };
 
 test("addImage puts an image element and its file on the board, selected, in one op", () => {

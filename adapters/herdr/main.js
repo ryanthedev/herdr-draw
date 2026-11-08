@@ -8,8 +8,9 @@ import { View, div, image, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
 import { props, exec, theme, settings, home, appHome, nextCommand, panes, readTextFile, writeTextFile, fonts } from "herdr";
 import { Editor, TOOLS, STROKES, FILLS, WIDTHS, STYLES } from "./core/editor.js";
-import { withAlpha, paintScene } from "./core/render.js";
+import { withAlpha } from "./core/render.js";
 import { PRESET_NAMES } from "./core/anim.js";
+import { exportScene, boardTheme } from "./core/export.js";
 import { FONT_FAMILY } from "./core/style.js";
 import { isShape, isLabel, layerOf } from "./core/model.js";
 import { toSvg } from "./svg.js";
@@ -97,6 +98,7 @@ export default class Draw extends View {
         const c = await nextCommand();
         if (c === "fit") this.ed.fit();
         else if (c === "play") this.ed.playToggle();
+        else if (c === "export") { if (this.file) await this.exportBoard(); }
         else if (c === "write") this.ed.beginText(null, this.ed.toWorld({ x: this.size.w / 3, y: this.size.h / 3 }));   // start typing (no mouse needed)
         else if (c === "focus") { cx.timer.after(60, () => { if (panes().find(q => q.focused)?.mod === MOD) this.handle.focus(); }); continue; }
         this.after(cx);
@@ -184,7 +186,7 @@ export default class Draw extends View {
       });
       cx.stop_propagation(); return;
     }
-    if (!ed.text && m.platform && m.shift && e.key === "e") { this.exportSvg(); cx.stop_propagation(); return this.after(cx); }
+    if (!ed.text && m.platform && m.shift && e.key === "e") { cx.spawn(async cx => { await this.exportBoard(); cx.notify(); }); cx.stop_propagation(); return this.after(cx); }
     if (!ed.text && !m.platform && !m.control && e.key === "i") { this.sidebar = !this.sidebar; cx.stop_propagation(); return this.after(cx); }
     if (ed.key(e.key, mm)) { cx.stop_propagation(); this.after(cx); }
   }
@@ -252,15 +254,26 @@ export default class Draw extends View {
       .on_scroll_wheel((e, cx) => { const z = Z(), m = e.modifiers ?? {}; ed.wheel({ x: e.delta.x / z, y: e.delta.y / z }, e.local_position ? this.pt(e) : undefined, { cmd: m.platform, ctrl: m.control }); this.after(cx); });
   }
 
-  exportSvg() {
-    const ed = this.ed, pal = this.palette(), saved = { view: { ...ed.view }, size: { ...ed.size } };
-    ed.size = { w: 1600, h: 1000 }; ed.fit(undefined, 40);
-    const svg = toSvg(paintScene(ed.doc, ed.view, pal), { width: 1600, height: 1000, background: pal.bg, files: ed.doc.files });
-    ed.view = saved.view; ed.size = saved.size; ed.changed();
-    const out = this.file.replace(/\.excalidraw(\.json)?$/, "") + ".svg";
-    // Not through a shell argument: a big board's SVG passes macOS's ~1 MB argv limit.
-    readText(out).then(old => writeText(out, svg, old)).then(() => { this.flash = `exported ${out.split("/").pop()}`; })
-      .catch(e => { this.error = `Export failed: ${e?.message ?? e}`; });
+  // ⌘⇧E or `herdr-app do herdr-draw.export`: board.svg and board.png (2×, at most 4096 px)
+  // next to the board, cropped to the drawing, on the board's own page color. The PNG is the
+  // same SVG rasterized by macOS's sips, which renders embedded pictures and any script.
+  async exportBoard() {
+    const doc = this.ed.doc, theme = boardTheme(doc.appState), base = this.file.replace(/\.excalidraw(\.json)?$/, "");
+    const name = p => p.split("/").pop();
+    try {
+      const flat = exportScene(doc, theme, { scale: 1 });
+      const svg = toSvg(flat.items, flat);
+      // Never as a shell argument: a board's SVG with photos passes macOS's ~1 MB argv limit.
+      await writeText(`${base}.svg`, svg, await readText(`${base}.svg`));
+      const big = exportScene(doc, theme, { scale: 2, maxPixels: 4096 });
+      // The SVG to rasterize waits in the cache, not beside the board: the board's folder is watched.
+      const dir = `${appHome()}/.cache/herdr-draw/tmp`, tmp = `${dir}/export-${Date.now()}.svg`;
+      await exec("mkdir", ["-p", dir]);
+      await writeText(tmp, toSvg(big.items, big), null);
+      const r = await exec("sh", ["-c", 'sips -s format png "$1" --out "$2" >/dev/null 2>&1; s=$?; rm -f "$1"; exit $s', "png-export", tmp, `${base}.png`]);
+      if (r.code !== 0) throw new Error(`sips couldn't make the PNG (${r.stderr || r.code})`);
+      this.flash = `exported ${name(base)}.svg + .png`;
+    } catch (e) { this.error = `Export failed: ${e?.message ?? e}`; }
   }
 
   // Excalidraw font classes → installed fonts: hand-drawn if one exists, the terminal font for mono.

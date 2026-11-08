@@ -194,7 +194,7 @@ test("screenshot of the adapter's own canvas output", async () => {
 const TINY = `${ROOT}test/fixtures/tiny.png`;
 const IMG_DIR = `${home}/.cache/herdr-draw/img`;
 // Let the image shell scripts really run (sips, shasum, base64); everything else stays recorded only.
-const realImages = () => { calls.real = (cmd, args) => ["mkdir", "test", "rm", "stat", "cat"].includes(cmd) || (cmd === "sh" && ["img-import", "img-cache", "big-write"].includes(args[2])); };
+const realImages = () => { calls.real = (cmd, args) => ["mkdir", "test", "rm", "stat", "cat"].includes(cmd) || (cmd === "sh" && ["img-import", "img-cache", "big-write", "png-export"].includes(args[2])); };
 
 test("dropping a PNG puts it on the board, cached where image() can load it, and saved in the file", async () => {
   realImages();
@@ -301,4 +301,24 @@ test("SVG export (⌘⇧E) of a photo board passes 1 MiB and still writes, pictu
   const out = readFileSync(svgPath, "utf8");
   expect(ui.view.error).toBeNull();
   expect(out).toContain(`<image href="data:image/png;base64,${big.slice(0, 40)}`);
+});
+
+test("⌘⇧E writes board.svg and a 2x board.png beside the board, cropped to the drawing", async () => {
+  realImages();
+  writeFileSync(file, JSON.stringify({ type: "excalidraw", version: 2, elements: [], appState: {}, files: {} }));
+  const ui = await open();
+  ui.key("r"); ui.drag([100, 100], [300, 200]);
+  ui.on("on_drop", { paths: [TINY] }); await ui.cx.flush();
+  ui.key("e", { platform: true, shift: true });
+  await ui.cx.flush(); await new Promise(r => setTimeout(r, 300)); await ui.cx.flush();
+  const base = file.replace(/\.excalidraw$/, "");
+  const svg = readFileSync(`${base}.svg`, "utf8");
+  const [, vw, vh] = /viewBox="0 0 (\d+) (\d+)"/.exec(svg).map(Number);
+  expect(svg).toContain('fill="#ffffff"');                         // the board's page, not the pane's dark theme
+  const dims = Bun.spawnSync(["sips", "-g", "pixelWidth", "-g", "pixelHeight", `${base}.png`]).stdout.toString();
+  expect(+/pixelWidth: (\d+)/.exec(dims)[1]).toBe(vw * 2);
+  expect(+/pixelHeight: (\d+)/.exec(dims)[1]).toBe(vh * 2);
+  expect(textOf(ui.tree())).toContain("exported board.svg + .png");
+  expect(readdirSync(`${home}/.cache/herdr-draw/tmp`)).toEqual([]);   // the 2x SVG is gone
+  Bun.spawnSync(["cp", `${base}.png`, `${ROOT}test/out/herdr-export.png`]);
 });
