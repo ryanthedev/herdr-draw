@@ -41,8 +41,12 @@ export function hatchLines(poly, angle, gap) {
   const back = ([x, y]) => [x * c + y * s, -x * s + y * c];
   const p = poly.map(rot);
   const ys = p.map(q => q[1]), y0 = Math.min(...ys), y1 = Math.max(...ys), out = [];
-  if ((y1 - y0) / gap > MAX_HATCH) gap = (y1 - y0) / MAX_HATCH;
-  for (let y = y0 + gap / 2; y < y1; y += gap) {
+  // An integer count, not `y += gap`: at huge coordinates adding the gap can leave y unchanged.
+  const n = Math.min(MAX_HATCH, Math.floor((y1 - y0) / gap));
+  if (!(n > 0)) return out;
+  const step = (y1 - y0) / n;
+  for (let k = 0; k < n; k++) {
+    const y = y0 + (k + 0.5) * step;
     const xs = [];
     for (let i = 0; i < p.length; i++) {
       const a = p[i], b = p[(i + 1) % p.length];

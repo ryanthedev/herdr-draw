@@ -91,4 +91,9 @@ test("hostile sizes can't make hatching loop forever", () => {
   expect(hatchLines([[0, 0], [NaN, 0], [5, 5]], 0, 8)).toEqual([]);
   expect(hatchLines([[0, 0], [Infinity, 0], [5, 5]], 0, 8)).toEqual([]);
   expect(hatchLines([[0, 0], [10, 0], [10, 10]], 0, 0)).toEqual([]);
+  // Far from the origin, y + gap === y: the loop must still end.
+  const far = [[1e20, 1e20], [1e20 + 1e6, 1e20], [1e20 + 1e6, 1e20 + 1e6], [1e20, 1e20 + 1e6]];
+  const t1 = Date.now();
+  expect(hatchLines(far, 0, 8).length).toBeLessThanOrEqual(1500);
+  expect(Date.now() - t1).toBeLessThan(1000);
 });
