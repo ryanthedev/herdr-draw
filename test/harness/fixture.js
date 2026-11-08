@@ -28,7 +28,7 @@ export function setup({ scene = emptyScene(), w = 900, h = 600 } = {}) {
     live: () => ed.doc.visible(),
     byType: t => ed.doc.visible().filter(e => e.type === t),
     async shot(name) {
-      const svg = toSvg(ed.displayList(THEME), { width: w, height: h, background: THEME.bg });
+      const svg = toSvg(ed.displayList(THEME), { width: w, height: h, background: THEME.bg, files: ed.doc.files });
       await rasterize(svg, `${import.meta.dir}/../out/${name}.png`, { width: w, height: h });
       return svg;
     },

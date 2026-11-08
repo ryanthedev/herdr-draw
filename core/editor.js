@@ -82,14 +82,15 @@ export class Editor {
   // ── changing the board ─────────────────────────────────────────────────
 
   // Run fn(tx) and commit its edits as one undoable step.
-  transact(fn, { history = true } = {}) {
+  transact(fn, { history = true, files } = {}) {
     const tx = new Tx(this.doc);
     const result = fn(tx);
-    this.commit(tx.before, tx.dirty, history);
+    this.commit(tx.before, tx.dirty, history, files);
     return result;
   }
 
-  commit(before, dirty, history = true) {
+  // `files`: image blobs that ride along in the same op (so no replica sees the element without its file).
+  commit(before, dirty, history = true, files) {
     if (!dirty.size) return;
     const elements = [];
     for (const [id, el] of dirty) {
@@ -99,7 +100,8 @@ export class Editor {
     this.doc.apply({ elements }, { force: true });
     const settled = this.settleArrows(new Set(dirty.keys()), before);
     if (settled.length) elements.push(...settled);
-    this.onOp({ elements });
+    if (files) { this.doc.apply({ files }); this.onOp({ elements, files }); }
+    else this.onOp({ elements });
     if (history) { this.undoStack.push(before); this.redoStack = []; if (this.undoStack.length > 200) this.undoStack.shift(); }
     this.changed();
   }
@@ -392,8 +394,10 @@ export class Editor {
     const at = this.snapPoint({ x: w.x - g.start.x, y: w.y - g.start.y });
     if (d.includes("w")) x0 += at.x; if (d.includes("e")) x1 += at.x;
     if (d.includes("n")) y0 += at.y; if (d.includes("s")) y1 += at.y;
-    if (m.shift && b.w && b.h) {   // keep proportions
+    if (this.keepAspect(m) && b.w && b.h) {   // keep proportions
       const r = b.w / b.h, nw = x1 - x0, nh = y1 - y0;
+      if (d === "e" || d === "w") y1 = y0 + Math.abs(nw) / r;
+      if (d === "n" || d === "s") x1 = x0 + Math.abs(nh) * r;
       if (d.length === 2) { if (Math.abs(nw / r) > Math.abs(nh)) { const h = nw / r * Math.sign(nh || 1) * Math.sign(nw || 1); if (d.includes("n")) y0 = y1 - Math.abs(h) * Math.sign(nh || 1); else y1 = y0 + Math.abs(h) * Math.sign(nh || 1); } else { const ww = Math.abs(nh * r) * Math.sign(nw || 1); if (d.includes("w")) x0 = x1 - ww; else x1 = x0 + ww; } }
     }
     const to = { x: Math.min(x0, x1), y: Math.min(y0, y1), w: Math.max(1, Math.abs(x1 - x0)), h: Math.max(1, Math.abs(y1 - y0)) };
@@ -424,6 +428,13 @@ export class Editor {
     this.livePut(...els);
   }
 
+  // Shift keeps proportions; for images (photos, screenshots) it's the other way round, as in Excalidraw.
+  keepAspect(m) {
+    const els = this.selected().filter(e => !isLabel(e));
+    const images = els.length > 0 && els.every(e => e.type === "image");
+    return !!m.shift !== images;
+  }
+
   // Resize one rotated shape in its own frame, keeping the opposite handle fixed on screen.
   resizeRotated(g, w, m) {
     const o = g.solo, orig = g.orig.get(o.id), b = bbox(orig), a = angleOf(orig), d = g.h.dir;
@@ -432,7 +443,11 @@ export class Editor {
     const dx = p.x - s.x, dy = p.y - s.y;
     if (d.includes("w")) x0 += dx; if (d.includes("e")) x1 += dx;
     if (d.includes("n")) y0 += dy; if (d.includes("s")) y1 += dy;
-    if (m.shift && b.w && b.h && d.length === 2) {
+    if (this.keepAspect(m) && b.w && b.h && d.length === 1) {
+      const r = b.w / b.h;
+      if (d === "e" || d === "w") y1 = y0 + Math.abs(x1 - x0) / r; else x1 = x0 + Math.abs(y1 - y0) * r;
+    }
+    if (this.keepAspect(m) && b.w && b.h && d.length === 2) {
       const r = b.w / b.h, nw = Math.abs(x1 - x0), nh = Math.abs(y1 - y0);
       if (nw / r > nh) { const h = nw / r; if (d.includes("n")) y0 = y1 - h; else y1 = y0 + h; } else { const ww = nh * r; if (d.includes("w")) x0 = x1 - ww; else x1 = x0 + ww; }
     }
@@ -707,8 +722,32 @@ export class Editor {
     const els = this.selected(); if (!els.length) return null;
     const all = [...els]; for (const el of els) { const l = isShape(el) && this.doc.labelOf(el); if (l) all.push(l); }
     // Excalidraw's clipboard format, so pasting into excalidraw.com works too.
-    this.clipboard = JSON.stringify({ type: "excalidraw/clipboard", elements: all.map(clone), files: {} });
+    const files = {};
+    for (const el of all) if (el.type === "image" && this.doc.files[el.fileId]) files[el.fileId] = this.doc.files[el.fileId];
+    this.clipboard = JSON.stringify({ type: "excalidraw/clipboard", elements: all.map(clone), files });
     return this.clipboard;
+  }
+
+  // Image blobs by file id ({ id, mimeType, dataURL, created }). Add-only, outside undo:
+  // undoing an insert deletes the element and leaves its file, as Excalidraw does.
+  addFiles(files) {
+    const op = { files };
+    if (this.doc.apply(op).length) this.onOp(op);
+  }
+
+  // Put an image on the board, centered at `at` (scene coords), scaled down to fit
+  // 60% of the view. `file`: { id, mimeType, dataURL, width, height } (natural px).
+  // Returns the new element's id.
+  addImage(file, at = this.toWorld({ x: this.size.w / 2, y: this.size.h / 2 })) {
+    const { id, mimeType, dataURL } = file;
+    const files = this.doc.files[id] ? undefined : { [id]: { id, mimeType, dataURL, created: this.clock() } };
+    let w = Math.max(1, +file.width || 200), h = Math.max(1, +file.height || 150);
+    const k = Math.min(1, (this.size.w * 0.6) / this.view.scale / w, (this.size.h * 0.6) / this.view.scale / h);
+    w *= k; h *= k;
+    const el = this.newEl("image", { fileId: id, x: at.x - w / 2, y: at.y - h / 2, width: w, height: h, opacity: 100 });
+    this.transact(tx => tx.add(el), { files });
+    this.select([el.id]);
+    return el.id;
   }
 
   // A Mermaid flowchart becomes editable shapes, laid out, centered at `at`; returns the new ids.
@@ -735,6 +774,7 @@ export class Editor {
     const els = data.elements.filter(e => !e.isDeleted), box = unionBox(els.filter(e => !isLabel(e)).map(bbox));
     const target = at ?? this.toWorld({ x: this.size.w / 2, y: this.size.h / 2 });
     const dx = target.x - (box.x + box.w / 2), dy = target.y - (box.y + box.h / 2);
+    if (data.files && typeof data.files === "object") this.addFiles(data.files);
     const idMap = new Map(els.map(e => [e.id, newId()])), z = this.doc.maxZ(this.activeLayer);
     const out = [];
     this.transact(tx => {

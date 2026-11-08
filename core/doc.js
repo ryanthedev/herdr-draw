@@ -1,7 +1,8 @@
 // The board in memory, and the one way to change it: apply an op.
 //
-// An op is { elements?: Element[], appState?: object } — whole elements, each
-// with a bumped version, plus a shallow patch of appState.herdr. The same op
+// An op is { elements?: Element[], appState?: object, files?: object } — whole
+// elements, each with a bumped version, a shallow patch of appState.herdr, and
+// image blobs by file id (add-only: an id is its content's hash, so it never changes). The same op
 // goes to the file, to the server and to every other viewer, so local edits,
 // undo, agent edits and remote edits are all one code path.
 
@@ -24,7 +25,7 @@ export class Doc {
     this.appState = { ...(scene.appState ?? {}) };
     this.appState.herdr = { ...(this.appState.herdr ?? {}) };
     this.appState.herdr.layers = layersOf(this.appState);
-    this.files = scene.files ?? {};
+    this.files = { ...(scene.files ?? {}) };
     this.rev = (this.rev ?? 0) + 1;
     this._sorted = null;
   }
@@ -63,6 +64,11 @@ export class Doc {
       if (!force && !wins(el, this.byId.get(el.id))) continue;
       this.byId.set(el.id, clone(el));
       changed.push(el.id);
+    }
+    for (const [id, f] of Object.entries(op.files ?? {})) {
+      if (this.files[id] || !f || typeof f.dataURL !== "string") continue;
+      this.files[id] = { ...f, id };
+      changed.push("$file:" + id);
     }
     if (op.appState) {
       this.appState.herdr = { ...this.appState.herdr, ...op.appState };

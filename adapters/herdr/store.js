@@ -56,7 +56,7 @@ export class FileStore {
 
   merge(text) {
     const s = JSON.parse(text);
-    const changed = this.ed.receive({ elements: s.elements ?? [], appState: s.appState?.herdr });
+    const changed = this.ed.receive({ elements: s.elements ?? [], appState: s.appState?.herdr, files: s.files });
     return changed.length;
   }
 

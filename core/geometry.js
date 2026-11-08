@@ -75,7 +75,7 @@ export function normAngle(a) { const t = Math.PI * 2; a %= t; if (a < 0) a += t;
 
 // Make width/height positive and linear boxes match their points.
 export function normalize(el) {
-  if (isShape(el) || el.type === "text") {
+  if (isShape(el) || el.type === "text" || el.type === "image") {
     if (el.width < 0) { el.x += el.width; el.width = -el.width; }
     if (el.height < 0) { el.y += el.height; el.height = -el.height; }
   }
@@ -115,7 +115,7 @@ export function hits(doc, el, p, tol) {
     for (let j = 1; j < pts.length; j++) if (distToSeg(p.x, p.y, pts[j - 1][0], pts[j - 1][1], pts[j][0], pts[j][1]) <= tol + el.strokeWidth) return true;
     return false;
   }
-  if (el.type === "text") return inBox(toLocal(el, p), bbox(el), tol);
+  if (el.type === "text" || el.type === "image") return inBox(toLocal(el, p), bbox(el), tol);   // an image is opaque: hit anywhere on it
   if (el.type === "frame") { const b = bbox(el); return inBox(toLocal(el, p), { x: b.x, y: b.y - 24, w: b.w, h: 24 }) || Math.abs(outlineDistance(el, p)) <= tol; }
   const d = outlineDistance(el, p);
   if (Math.abs(d) <= tol + el.strokeWidth) return true;

@@ -26,7 +26,11 @@ const FACES = {
   sans: "Helvetica, Arial, sans-serif",
 };
 
-export function toSvg(items, { width, height, background, font = FACES.sans } = {}) {
+// Only base64 raster/SVG data URLs reach an href: a board's `files` are untrusted.
+// (An SVG inside <image> can't run script.)
+const DATA_URL = /^data:image\/(?:png|jpeg|gif|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/;
+
+export function toSvg(items, { width, height, background, font = FACES.sans, files = {} } = {}) {
   width = num(width, 800); height = num(height, 600); const base = esc(font);
   const out = [`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`];
   if (background) out.push(`<rect width="100%" height="100%" fill="${color(background)[0]}"/>`);
@@ -35,6 +39,12 @@ export function toSvg(items, { width, height, background, font = FACES.sans } = 
     if (it.t === "path") {
       if (it.fill) { const [c, o] = color(it.fill, op); out.push(`<path d="${d(it.cmds)}Z" fill="${c}" fill-opacity="${o.toFixed(3)}"/>`); }
       else { const [c, o] = color(it.stroke, op); out.push(`<path d="${d(it.cmds)}" fill="none" stroke="${c}" stroke-opacity="${o.toFixed(3)}" stroke-width="${num(it.width, 1)}" stroke-linecap="round" stroke-linejoin="round"${Array.isArray(it.dash) ? ` stroke-dasharray="${it.dash.map(v => num(v)).join(" ")}"` : ""}/>`); }
+    } else if (it.t === "image") {
+      const url = files?.[it.fileId]?.dataURL;
+      if (typeof url !== "string" || !DATA_URL.test(url)) continue;
+      const deg = num(it.angle) * 180 / Math.PI, x = num(it.x), y = num(it.y), w = Math.max(0, num(it.w)), h = Math.max(0, num(it.h));
+      const turn = deg ? ` transform="rotate(${deg.toFixed(2)} ${num(it.cx).toFixed(1)} ${num(it.cy).toFixed(1)})"` : "";
+      out.push(`<image href="${url}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" preserveAspectRatio="none" opacity="${op.toFixed(3)}"${turn}/>`);
     } else if (it.t === "text") {
       // Rotated text turns about its center (adapters without text rotation draw it upright).
       const deg = num(it.angle) * 180 / Math.PI;

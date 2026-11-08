@@ -13,6 +13,10 @@ export const LINEAR = ["arrow", "line", "freedraw"];
 export const isShape = el => SHAPES.includes(el.type);
 export const isLinear = el => LINEAR.includes(el.type);
 export const isLabel = el => el.type === "text" && !!el.containerId;
+// Images are boxes like shapes, but take no label, fill or stroke: their pixels are in the board's `files`.
+export const isImage = el => el.type === "image";
+// A box that keeps `angle` and resizes by its corners: shapes and images.
+export const isBoxy = el => isShape(el) || isImage(el);
 
 let counter = 0;
 export function newId() {
@@ -46,6 +50,7 @@ export function makeElement(type, fields = {}) {
   if (type === "freedraw") Object.assign(base, { points: [[0, 0]], pressures: [], simulatePressure: true, lastCommittedPoint: null });
   if (type === "text") Object.assign(base, { text: "", originalText: "", fontSize: 20, fontFamily: 1, textAlign: "left", verticalAlign: "top", containerId: null, lineHeight: 1.25, autoResize: true });
   if (type === "frame") Object.assign(base, { name: null, strokeWidth: 1 });
+  if (type === "image") Object.assign(base, { fileId: null, status: "saved", scale: [1, 1], crop: null, strokeColor: "transparent", roughness: 0 });
   const el = Object.assign(base, fields);
   el.customData = { ...base.customData, ...(fields.customData ?? {}) };
   return el;

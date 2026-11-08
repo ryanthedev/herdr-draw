@@ -3,6 +3,7 @@
 //   { t: "path", cmds, stroke, width, dash?, opacity? }   cmds: ["M",x,y] ["L",x,y] ["Q",x,y,cx,cy]
 //   { t: "path", cmds, fill, opacity? }                    (closed polygons)
 //   { t: "text", x, y, text, size, color, align, box?, lineHeight, opacity? }
+//   { t: "image", fileId, mimeType, x, y, w, h, angle, cx, cy, opacity? }   pixels: doc.files[fileId]
 // Colors arrive as #rrggbb or #rrggbbaa; the theme decides what "default ink" is.
 
 import { DEFAULT_STROKE, isShape, isLinear, isLabel } from "./model.js";
@@ -130,6 +131,18 @@ export function paintElement(doc, el, P, view, theme, out, opts = {}) {
     } else {
       const [x, y] = Q(el.x, el.y), c = centerOf(el), [cx, cy] = Q(c.x, c.y);
       out.push({ t: "text", id: el.id, font: fontClass(el.fontFamily), angle: angleOf(el), cx, cy, x, y, text: el.text, size: el.fontSize * s * (a?.scale ?? 1), color: ink(el.strokeColor, theme), align: "left", lineHeight: el.lineHeight ?? 1.25, opacity, reveal: progress });
+    }
+    return;
+  }
+
+  if (el.type === "image") {
+    const b = bbox(el), [x0, y0] = Q(b.x, b.y), [x1, y1] = Q(b.x + b.w, b.y + b.h), [cx, cy] = Q(b.x + b.w / 2, b.y + b.h / 2);
+    const file = doc.files?.[el.fileId];
+    if (file && typeof file.dataURL === "string") {
+      out.push({ t: "image", id: el.id, fileId: el.fileId, mimeType: file.mimeType, x: x0, y: y0, w: x1 - x0, h: y1 - y0, angle: angleOf(el), cx, cy, opacity: opacity * progress });
+    } else {   // the file hasn't arrived (or was lost): a dashed box where it goes
+      const pts = outlinePoints({ ...el, type: "rectangle", roundness: null }).map(p => Q(p[0], p[1]));
+      out.push({ t: "path", id: el.id, cmds: pts.map((p, i) => [i ? "L" : "M", ...p]), stroke: theme.dim, width: 1, dash: [6, 4], opacity });
     }
     return;
   }
