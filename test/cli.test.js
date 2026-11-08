@@ -33,3 +33,13 @@ test("drawh: \\n in a label is a line break", () => {
   const ed = new Editor({ scene: JSON.parse(readFileSync(f, "utf8")) });
   expect(ed.doc.live().find(e => e.type === "text").text).toBe("two\nlines");
 });
+
+test("drawh rotate and --angle set Excalidraw angles the core reads", () => {
+  const f = `${mkdtempSync(`${tmpdir()}/drawh-`)}/b.excalidraw`;
+  const id = drawh("add", f, "rect", "--at", "0,0", "--label", "x", "--angle", "30");
+  drawh("rotate", f, id, "15");
+  const ed = new Editor({ scene: JSON.parse(readFileSync(f, "utf8")) });
+  const r = ed.doc.get(id);
+  expect(Math.round(r.angle * 180 / Math.PI)).toBe(45);
+  expect(ed.doc.labelOf(r).angle).toBeCloseTo(r.angle, 9);
+});

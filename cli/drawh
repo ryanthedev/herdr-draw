@@ -15,6 +15,7 @@ Coordinates are scene pixels, x right, y down. Shapes are 140x80 unless --w/--h.
   drawh label FILE ID TEXT                      set or replace a shape's label
   drawh move FILE ID --at X,Y | --by DX,DY
   drawh style FILE ID [--color C] [--fill C|none] [--dashed|--solid]
+  drawh rotate FILE ID... DEG                   turn elements by DEG degrees (clockwise) about their center
   drawh rm FILE ID...                           delete elements (and their labels)
   drawh clear FILE                              delete everything
   drawh grid FILE LABEL... [--cols N] [--kind rect] [--gap 60]
@@ -31,7 +32,7 @@ Coordinates are scene pixels, x right, y down. Shapes are 140x80 unless --w/--h.
 Shapes, text and grids take --layer NAME (created if missing).
 IDs: anywhere an ID is expected, a shape's exact label also works.
 """
-import argparse, json, os, random, subprocess, sys, time
+import argparse, json, math, os, random, subprocess, sys, time
 
 CACHE = os.path.expanduser("~/.cache/herdr-draw")
 COLORS = {"default": "#1e1e1e", "black": "#1e1e1e", "red": "#e03131", "green": "#2f9e44", "blue": "#1971c2",
@@ -209,6 +210,8 @@ def main():
     m = sub.add_parser("move"); m.add_argument("file"); m.add_argument("id"); m.add_argument("--at"); m.add_argument("--by")
     s = sub.add_parser("style"); s.add_argument("file"); s.add_argument("id"); s.add_argument("--color"); s.add_argument("--fill")
     s.add_argument("--dashed", action="store_true"); s.add_argument("--solid", action="store_true")
+    ro = sub.add_parser("rotate"); ro.add_argument("file"); ro.add_argument("ids", nargs="+"); ro.add_argument("deg", type=float)
+    a.add_argument("--angle", type=float, default=0, help="degrees, clockwise")
     rm = sub.add_parser("rm"); rm.add_argument("file"); rm.add_argument("ids", nargs="+")
     c = sub.add_parser("clear"); c.add_argument("file")
     g = sub.add_parser("grid"); g.add_argument("file"); g.add_argument("labels", nargs="+")
@@ -271,9 +274,11 @@ def main():
         if args.color: el["strokeColor"] = color(args.color)
         if args.fill: el["backgroundColor"] = fill(args.fill)
         if args.dashed: el["strokeStyle"] = "dashed"
+        el["angle"] = math.radians(args.angle) % (2 * math.pi)
         place(scene, el, args.layer)
         if args.label:
             set_label(scene, el, args.label)
+            label_of(scene, el)["angle"] = el["angle"]
         out = el["id"]
     elif args.cmd == "text":
         x, y = pair(args.at, "--at")
@@ -372,6 +377,25 @@ def main():
                 else: cd["anim"] = {"preset": args.preset, "start": t_, "duration": args.duration}
                 x["customData"] = cd; touch(x)
             t_ += args.stagger
+    elif args.cmd == "rotate":
+        da = math.radians(args.deg)
+        for ref in args.ids:
+            el = find(scene, ref)
+            if el["type"] in ("arrow", "line", "freedraw"):
+                # Lines keep angle 0: turn their points about their center.
+                xs = [el["x"] + p[0] for p in el["points"]]; ys = [el["y"] + p[1] for p in el["points"]]
+                cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+                c, s_ = math.cos(da), math.sin(da)
+                pts = [(cx + (x - cx) * c - (y - cy) * s_, cy + (x - cx) * s_ + (y - cy) * c) for x, y in zip(xs, ys)]
+                el["x"], el["y"] = pts[0]
+                el["points"] = [[x - pts[0][0], y - pts[0][1]] for x, y in pts]
+                el["startBinding"] = el["endBinding"] = None
+            else:
+                el["angle"] = (el.get("angle", 0) + da) % (2 * math.pi)
+                lab = label_of(scene, el)
+                if lab: lab["angle"] = el["angle"]; touch(lab)
+            touch(el)
+            out = el["id"]
     elif args.cmd == "clear":
         for el in live(scene):
             el["isDeleted"] = True; touch(el)

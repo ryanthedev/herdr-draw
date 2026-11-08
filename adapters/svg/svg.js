@@ -30,6 +30,9 @@ export function toSvg(items, { width, height, background, font = "Helvetica, Ari
       if (it.fill) { const [c, o] = color(it.fill, op); out.push(`<path d="${d(it.cmds)}Z" fill="${c}" fill-opacity="${o.toFixed(3)}"/>`); }
       else { const [c, o] = color(it.stroke, op); out.push(`<path d="${d(it.cmds)}" fill="none" stroke="${c}" stroke-opacity="${o.toFixed(3)}" stroke-width="${num(it.width, 1)}" stroke-linecap="round" stroke-linejoin="round"${Array.isArray(it.dash) ? ` stroke-dasharray="${it.dash.map(v => num(v)).join(" ")}"` : ""}/>`); }
     } else if (it.t === "text") {
+      // Rotated text turns about its center (adapters without text rotation draw it upright).
+      const deg = num(it.angle) * 180 / Math.PI;
+      if (deg) out.push(`<g transform="rotate(${deg.toFixed(2)} ${num(it.cx).toFixed(1)} ${num(it.cy).toFixed(1)})">`);
       const size = num(it.size, 16), lines = String(it.text).split("\n"), lh = size * num(it.lineHeight, 1.25), [c, o] = color(it.color, op);
       it = { ...it, size, x: num(it.x), y: num(it.y), box: it.box && { x: num(it.box.x), y: num(it.box.y), w: num(it.box.w), h: num(it.box.h) } };
       if (it.box) {
@@ -38,6 +41,7 @@ export function toSvg(items, { width, height, background, font = "Helvetica, Ari
       } else {
         lines.forEach((l, i) => out.push(`<text x="${it.x.toFixed(1)}" y="${(it.y + lh * (i + 0.75)).toFixed(1)}" font-family="${font}" font-size="${it.size.toFixed(1)}" fill="${c}" fill-opacity="${o.toFixed(3)}">${esc(l)}</text>`));
       }
+      if (deg) out.push("</g>");
     }
   }
   out.push("</svg>");

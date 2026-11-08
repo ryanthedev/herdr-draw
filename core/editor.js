@@ -11,6 +11,7 @@ import {
 import { Doc } from "./doc.js";
 import {
   bbox, unionBox, inBox, boxInBox, center, normalize, hits, hitTest, shapeAt, resolvedPoints, settle, mapIntoBox, distToSeg, segmentsIntersect,
+  bounds, corners, rotate, rotateAbout, angleOf, centerOf, toLocal, toWorld as elToWorld, normAngle,
 } from "./geometry.js";
 import { paintScene, paintElement, project, rectCmds, withAlpha } from "./render.js";
 import { PRESETS, timelineEnd } from "./anim.js";
@@ -39,6 +40,8 @@ export const STYLES = ["solid", "dashed", "dotted"];
 const HANDLE = 5;          // how close a press must be to a handle, screen px
 const SNAP = 6;            // object snap distance, screen px
 const DRAG_SLOP = 3;       // px before a press becomes a drag
+const ROT_GAP = 24;        // the rotate handle sits this far above the selection, screen px
+const ROT_SNAP = Math.PI / 12;   // shift snaps rotation to 15°
 
 export class Editor {
   constructor({ scene, onOp = () => {}, clock = () => Date.now() } = {}) {
@@ -154,7 +157,23 @@ export class Editor {
     const g = el.groupIds?.[el.groupIds.length - 1];
     return g ? this.doc.live().filter(e => e.groupIds?.includes(g)).map(e => e.id) : [el.id];
   }
-  selBox() { const els = this.selected(); return els.length ? unionBox(els.map(bbox)) : null; }
+  selBox() { const els = this.selected().filter(e => !isLabel(e)); return els.length ? unionBox(els.map(bounds)) : null; }
+
+  // One rotated shape is resized and outlined in its own frame; anything else uses the axis-aligned box.
+  soloRotated() { const els = this.selected().filter(e => !isLabel(e)); return els.length === 1 && angleOf(els[0]) ? els[0] : null; }
+
+  // The selection frame as 4 screen corners (nw, ne, se, sw), padded.
+  selFrame(padPx = 8) {
+    const s = this.view.scale, pad = padPx / s, el = this.soloRotated();
+    if (el) {
+      const b = bbox(el);
+      return [[b.x - pad, b.y - pad], [b.x + b.w + pad, b.y - pad], [b.x + b.w + pad, b.y + b.h + pad], [b.x - pad, b.y + b.h + pad]]
+        .map(([x, y]) => this.toScreen(elToWorld(el, { x, y })));
+    }
+    const b = this.selBox(); if (!b) return null;
+    return [[b.x - pad, b.y - pad], [b.x + b.w + pad, b.y - pad], [b.x + b.w + pad, b.y + b.h + pad], [b.x - pad, b.y + b.h + pad]].map(([x, y]) => this.toScreen({ x, y }));
+  }
+  selCenter() { const el = this.soloRotated(); if (el) return centerOf(el); const b = this.selBox(); return b && center(b); }
 
   // Screen-space handles of the selection: 8 resize handles, or a linear element's points.
   handles() {
@@ -162,12 +181,15 @@ export class Editor {
     if (els.length === 1 && isLinear(els[0]) && els[0].type !== "freedraw") {
       return resolvedPoints(this.doc, els[0]).map((p, i) => ({ kind: "point", i, ...this.toScreen({ x: p[0], y: p[1] }) }));
     }
-    const b = this.selBox(); if (!b || !els.length) return [];
-    if (els.length === 1 && els[0].type === "text") return [];
-    const a = this.toScreen(b), z = this.toScreen({ x: b.x + b.w, y: b.y + b.h }), pad = 8;
-    const x0 = a.x - pad, y0 = a.y - pad, x1 = z.x + pad, y1 = z.y + pad, mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
-    return [["nw", x0, y0], ["n", mx, y0], ["ne", x1, y0], ["e", x1, my], ["se", x1, y1], ["s", mx, y1], ["sw", x0, y1], ["w", x0, my]]
-      .map(([dir, x, y]) => ({ kind: "resize", dir, x, y }));
+    const f = this.selFrame(); if (!f || !els.length) return [];
+    const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+    const [nw, ne, se, sw] = f, n = mid(nw, ne);
+    // The rotate handle: out from the top edge's middle, away from the center.
+    const c = mid(nw, se), len = Math.hypot(n.x - c.x, n.y - c.y) || 1;
+    const rot = { kind: "rotate", x: n.x + (n.x - c.x) / len * ROT_GAP, y: n.y + (n.y - c.y) / len * ROT_GAP };
+    if (els.length === 1 && els[0].type === "text") return [rot];
+    return [["nw", nw], ["n", n], ["ne", ne], ["e", mid(ne, se)], ["se", se], ["s", mid(se, sw)], ["sw", sw], ["w", mid(sw, nw)]]
+      .map(([dir, p]) => ({ kind: "resize", dir, x: p.x, y: p.y })).concat([rot]);
   }
   handleAt(p) { return this.handles().find(h => Math.abs(h.x - p.x) <= HANDLE && Math.abs(h.y - p.y) <= HANDLE) ?? null; }
 
@@ -207,8 +229,15 @@ export class Editor {
   downSelect(p, w, m) {
     const h = this.handleAt(p);
     if (h) {
-      const els = this.selected();
-      this.g = { kind: h.kind === "point" ? "point" : "resize", h, start: w, box: this.selBox(), orig: new Map(els.map(e => [e.id, clone(e)])), before: new Map(els.map(e => [e.id, clone(e)])) };
+      const els = [...this.selected()];
+      for (const e of this.selected()) { const l = isShape(e) && this.doc.labelOf(e); if (l && !els.includes(l)) els.push(l); }
+      const orig = new Map(els.map(e => [e.id, clone(e)])), before = new Map(els.map(e => [e.id, clone(e)]));
+      if (h.kind === "rotate") {
+        const c = this.selCenter();
+        this.g = { kind: "rotate", c, a0: Math.atan2(w.y - c.y, w.x - c.x), solo: this.soloRotated() ?? (els.filter(e => !isLabel(e)).length === 1 ? els[0] : null), orig, before };
+        return;
+      }
+      this.g = { kind: h.kind === "point" ? "point" : "resize", h, start: w, box: this.selBox(), solo: this.soloRotated(), orig, before };
       return;
     }
     let hit = hitTest(this.doc, w, this.tol());
@@ -256,11 +285,12 @@ export class Editor {
         g.end = w;
         const box = normBox(g.start, w);
         this.sel = new Set(g.base);
-        for (const el of this.doc.visible()) if (!isLabel(el) && boxInBox(bbox(el), box)) this.withGroup(el).forEach(id => this.sel.add(id));
+        for (const el of this.doc.visible()) if (!isLabel(el) && boxInBox(bounds(el), box)) this.withGroup(el).forEach(id => this.sel.add(id));
         return this.changed();
       }
       case "move": return this.moveSel(g, p, w, m);
-      case "resize": return this.resizeSel(g, w, m);
+      case "resize": return g.solo ? this.resizeRotated(g, w, m) : this.resizeSel(g, w, m);
+      case "rotate": return this.rotateSel(g, w, m);
       case "point": return this.movePoint(g, w);
       case "create": return this.dragCreate(g, w, m);
       case "poly": { const el = g.el; el.points[el.points.length - 1] = [w.x - el.x, w.y - el.y]; return this.livePut(el); }
@@ -279,7 +309,7 @@ export class Editor {
         for (const id of g.extra ?? []) { const e = this.doc.get(id); if (e) dirty.set(id, clone(e)); }
         return this.commitGesture(g.before, dirty);
       }
-      case "resize": case "point": {
+      case "resize": case "point": case "rotate": {
         const dirty = new Map([...g.orig.keys()].map(id => [id, clone(this.doc.get(id))]).filter(([, e]) => e));
         if (g.kind === "point") this.rebind(dirty.values().next().value, g.h.i);
         return this.commitGesture(g.before, dirty);
@@ -340,7 +370,7 @@ export class Editor {
       g.extra = [...ids].filter(id => !this.sel.has(id));
       g.orig = new Map([...ids].map(id => [id, clone(this.doc.get(id))]).filter(([, e]) => e && this.doc.editable(e)));
       g.before = new Map([...g.orig].map(([id, e]) => [id, clone(e)]));
-      g.box = unionBox([...g.orig.values()].filter(e => !isLabel(e)).map(bbox));
+      g.box = unionBox([...g.orig.values()].filter(e => !isLabel(e)).map(bounds));
     }
     let dx = w.x - g.start.x, dy = w.y - g.start.y;
     if (m.shift) { if (Math.abs(dx) > Math.abs(dy)) dy = 0; else dx = 0; }
@@ -370,6 +400,59 @@ export class Editor {
       els.push(c);
     }
     this.livePut(...els);
+  }
+
+  // Turn the selection about its center; shift snaps the angle to 15°.
+  rotateSel(g, w, m) {
+    let da = Math.atan2(w.y - g.c.y, w.x - g.c.x) - g.a0;
+    if (m.shift) {
+      const base = g.solo && !isLinear(g.solo) ? g.solo.angle || 0 : 0;
+      da = Math.round((base + da) / ROT_SNAP) * ROT_SNAP - base;
+    }
+    const els = [];
+    for (const [, o] of g.orig) {
+      const c = clone(o);
+      if (isLabel(o)) { const host = g.orig.get(o.containerId); c.angle = host ? normAngle((host.angle || 0) + da) : o.angle; }
+      else rotateAbout(c, o, g.c, da);
+      els.push(c);
+    }
+    this.livePut(...els);
+  }
+
+  // Resize one rotated shape in its own frame, keeping the opposite handle fixed on screen.
+  resizeRotated(g, w, m) {
+    const o = g.solo, orig = g.orig.get(o.id), b = bbox(orig), a = angleOf(orig), d = g.h.dir;
+    const p = toLocal(orig, w), s = toLocal(orig, g.start);
+    let x0 = b.x, y0 = b.y, x1 = b.x + b.w, y1 = b.y + b.h;
+    const dx = p.x - s.x, dy = p.y - s.y;
+    if (d.includes("w")) x0 += dx; if (d.includes("e")) x1 += dx;
+    if (d.includes("n")) y0 += dy; if (d.includes("s")) y1 += dy;
+    if (m.shift && b.w && b.h && d.length === 2) {
+      const r = b.w / b.h, nw = Math.abs(x1 - x0), nh = Math.abs(y1 - y0);
+      if (nw / r > nh) { const h = nw / r; if (d.includes("n")) y0 = y1 - h; else y1 = y0 + h; } else { const ww = nh * r; if (d.includes("w")) x0 = x1 - ww; else x1 = x0 + ww; }
+    }
+    const nb = { x: Math.min(x0, x1), y: Math.min(y0, y1), w: Math.max(1, Math.abs(x1 - x0)), h: Math.max(1, Math.abs(y1 - y0)) };
+    // The new box's center, from the old frame back to the scene.
+    const c = rotate({ x: nb.x + nb.w / 2, y: nb.y + nb.h / 2 }, center(b), a);
+    const el = clone(orig);
+    el.width = nb.w; el.height = nb.h; el.x = c.x - nb.w / 2; el.y = c.y - nb.h / 2;
+    const l = isShape(el) && this.doc.labelOf(el); if (l) this.fitHost(el, l);
+    this.livePut(el);
+  }
+
+  rotateBy(deg) {
+    const els = this.selected().filter(e => !isLabel(e) && this.doc.editable(e)); if (!els.length) return;
+    const c = this.selCenter(), da = deg * Math.PI / 180;
+    this.transact(tx => {
+      for (const e of els) {
+        rotateAbout(tx.get(e.id), clone(e), c, da);
+        const l = isShape(e) && this.doc.labelOf(e); if (l) tx.get(l.id).angle = tx.get(e.id).angle;
+      }
+    });
+  }
+  resetRotation() {
+    const els = this.selected().filter(e => !isLinear(e) && angleOf(e)); if (!els.length) return;
+    this.transact(tx => { for (const e of els) { tx.get(e.id).angle = 0; const l = isShape(e) && this.doc.labelOf(e); if (l) tx.get(l.id).angle = 0; } });
   }
 
   // Grow a shape downward until its label fits (Excalidraw does the same).
@@ -505,7 +588,7 @@ export class Editor {
     let bx = null, by = null;
     for (const el of this.doc.visible()) {
       if (skip.has(el.id) || isLabel(el)) continue;
-      const b = bbox(el), tx = [b.x, b.x + b.w / 2, b.x + b.w], ty = [b.y, b.y + b.h / 2, b.y + b.h];
+      const b = bounds(el), tx = [b.x, b.x + b.w / 2, b.x + b.w], ty = [b.y, b.y + b.h / 2, b.y + b.h];
       for (const a of xs) for (const t of tx) { const d = t - a; if (Math.abs(d) <= tol && (!bx || Math.abs(d) < Math.abs(bx.d))) bx = { d, at: t, b }; }
       for (const a of ys) for (const t of ty) { const d = t - a; if (Math.abs(d) <= tol && (!by || Math.abs(d) < Math.abs(by.d))) by = { d, at: t, b }; }
     }
@@ -675,10 +758,10 @@ export class Editor {
 
   align(how) {
     const els = this.selected().filter(e => !isLabel(e)); if (els.length < 2) return;
-    const B = unionBox(els.map(bbox));
+    const B = unionBox(els.map(bounds));
     this.transact(tx => {
       for (const e of els) {
-        const b = bbox(e); let dx = 0, dy = 0;
+        const b = bounds(e); let dx = 0, dy = 0;
         if (how === "left") dx = B.x - b.x; if (how === "right") dx = B.x + B.w - (b.x + b.w); if (how === "hcenter") dx = B.x + B.w / 2 - (b.x + b.w / 2);
         if (how === "top") dy = B.y - b.y; if (how === "bottom") dy = B.y + B.h - (b.y + b.h); if (how === "vcenter") dy = B.y + B.h / 2 - (b.y + b.h / 2);
         this.shift(tx, e, dx, dy);
@@ -689,7 +772,7 @@ export class Editor {
   distribute(axis) {
     const els = this.selected().filter(e => !isLabel(e)); if (els.length < 3) return;
     const k = axis === "h" ? ["x", "w"] : ["y", "h"];
-    const items = els.map(e => ({ e, b: bbox(e) })).sort((a, b) => a.b[k[0]] - b.b[k[0]]);
+    const items = els.map(e => ({ e, b: bounds(e) })).sort((a, b) => a.b[k[0]] - b.b[k[0]]);
     const span = items[items.length - 1].b[k[0]] + items[items.length - 1].b[k[1]] - items[0].b[k[0]];
     const gap = (span - items.reduce((s, i) => s + i.b[k[1]], 0)) / (items.length - 1);
     this.transact(tx => {
@@ -798,7 +881,7 @@ export class Editor {
 
   fit(els = this.doc.visible().filter(e => !isLabel(e)), pad = 40) {
     if (!els.length) { this.view = { x: 40, y: 40, scale: 1 }; return this.changed(); }
-    const b = unionBox(els.map(bbox));
+    const b = unionBox(els.map(bounds));
     const scale = Math.max(0.1, Math.min(1, Math.min((this.size.w - pad * 2) / (b.w || 1), (this.size.h - pad * 2) / (b.h || 1))));
     this.view = { scale, x: (this.size.w / scale - b.w) / 2 - b.x, y: (this.size.h / scale - b.h) / 2 - b.y };
     this.changed();
@@ -833,6 +916,8 @@ export class Editor {
       const a = { a: () => this.align("left"), d: () => this.align("right"), w: () => this.align("top"), s: () => this.align("bottom"), h: () => this.align("hcenter"), v: () => this.align("vcenter") }[k];
       if (a) { a(); return true; }
     }
+    if (k === "<" || (m.shift && k === ",")) { this.rotateBy(-15); return true; }
+    if (k === ">" || (m.shift && k === ".")) { this.rotateBy(15); return true; }
     if (m.shift && k === "h") { this.distribute("h"); return true; }
     if (m.shift && k === "v") { this.distribute("v"); return true; }
     const tool = TOOLS.find(t => t.keys.includes(k));
@@ -866,6 +951,20 @@ export class Editor {
 
   // ── what to paint ──────────────────────────────────────────────────────
 
+  // An element's drawn outline (rotation included), padded, in screen px.
+  outlineCmds(el, padPx) {
+    const pad = padPx / this.view.scale;
+    let pts;
+    if (angleOf(el)) {
+      const b = bbox(el);
+      pts = [[b.x - pad, b.y - pad], [b.x + b.w + pad, b.y - pad], [b.x + b.w + pad, b.y + b.h + pad], [b.x - pad, b.y + b.h + pad]].map(([x, y]) => this.toScreen(elToWorld(el, { x, y })));
+    } else {
+      const b = bbox(el);
+      pts = [[b.x - pad, b.y - pad], [b.x + b.w + pad, b.y - pad], [b.x + b.w + pad, b.y + b.h + pad], [b.x - pad, b.y + b.h + pad]].map(([x, y]) => this.toScreen({ x, y }));
+    }
+    return [...pts.map((p, i) => [i ? "L" : "M", p.x, p.y]), ["L", pts[0].x, pts[0].y]];
+  }
+
   displayList(theme) {
     const time = this.time();
     const items = paintScene(this.doc, this.view, theme, { time: time ?? undefined });
@@ -875,17 +974,24 @@ export class Editor {
     const P = project(this.view), acc = theme.accent;
     if (this.hover && !this.sel.has(this.hover)) {
       const el = this.doc.get(this.hover);
-      if (el) { const b = bbox(el), [x, y] = P(b.x, b.y); items.push({ t: "path", cmds: rectCmds(x - 4, y - 4, b.w * this.view.scale + 8, b.h * this.view.scale + 8), stroke: withAlpha(acc, 0.45), width: 1, dash: null }); }
+      if (el) items.push({ t: "path", cmds: this.outlineCmds(el, 4), stroke: withAlpha(acc, 0.45), width: 1, dash: null });
     }
     const els = this.selected();
     if (els.length) {
-      if (els.length > 1) for (const e of els) { if (isLabel(e)) continue; const b = bbox(e), [x, y] = P(b.x, b.y); items.push({ t: "path", cmds: rectCmds(x - 3, y - 3, b.w * this.view.scale + 6, b.h * this.view.scale + 6), stroke: withAlpha(acc, 0.5), width: 1, dash: [3, 3] }); }
+      if (els.length > 1) for (const e of els) { if (isLabel(e)) continue; items.push({ t: "path", cmds: this.outlineCmds(e, 3), stroke: withAlpha(acc, 0.5), width: 1, dash: [3, 3] }); }
       const hs = this.handles();
-      if (!hs.length || hs[0].kind === "resize") {
-        const b = this.selBox(), [x, y] = P(b.x, b.y);
-        items.push({ t: "path", cmds: rectCmds(x - 6, y - 6, b.w * this.view.scale + 12, b.h * this.view.scale + 12), stroke: acc, width: 1, dash: els.some(e => e.locked) ? [4, 4] : null });
+      if (!hs.length || hs[0].kind !== "point") {
+        const f = this.selFrame(6);
+        if (f) items.push({ t: "path", cmds: [["M", f[0].x, f[0].y], ["L", f[1].x, f[1].y], ["L", f[2].x, f[2].y], ["L", f[3].x, f[3].y], ["L", f[0].x, f[0].y]], stroke: acc, width: 1, dash: els.some(e => e.locked) ? [4, 4] : null });
       }
       for (const h of hs) {
+        if (h.kind === "rotate") {   // a small circle
+          const r = 5, ring = [];
+          for (let i = 0; i <= 16; i++) { const t = i / 16 * Math.PI * 2; ring.push([i ? "L" : "M", h.x + Math.cos(t) * r, h.y + Math.sin(t) * r]); }
+          items.push({ t: "path", cmds: ring.slice(0, 16), fill: theme.bg });
+          items.push({ t: "path", cmds: ring, stroke: acc, width: 1.5, dash: null });
+          continue;
+        }
         const r = h.kind === "point" ? 5 : 4;
         items.push({ t: "path", cmds: rectCmds(h.x - r, h.y - r, r * 2, r * 2).slice(0, 4), fill: theme.bg });
         items.push({ t: "path", cmds: rectCmds(h.x - r, h.y - r, r * 2, r * 2), stroke: acc, width: 1.5, dash: null });

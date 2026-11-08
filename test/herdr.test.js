@@ -37,7 +37,7 @@ async function open(size = { width: 1100, height: 700 }) {
     },
     dblclick(at) { ui.on("on_mouse_down:left", ui.ev(...at, {}, 2)); ui.on("on_mouse_up:left", ui.ev(...at, {}, 2)); },
     key(key, m = {}) { const h = ui.tree().handlers.on_key_down; cxs.call(c => h({ key, modifiers: { shift: false, alt: false, control: false, platform: false, ...m } }, c)); },
-    input() { const n = find(ui.tree(), n => n.kind === "input"); return n && { type: t => cxs.call(c => n.state.type(t, c)), submit: () => cxs.call(c => n.state.submit(c)) }; },
+    input() { const n = find(ui.tree(), n => n.kind === "input"); return n && { type: t => cxs.call(c => n.state.type(t, c)), submit: (ev = { secondary: true }) => cxs.call(c => n.state.submit(c, ev)) }; },
     click(id) { ui.fire(id, "on_click", ui.ev(0, 0)); },
     async shot(name) {
       const c = ui.canvas();
@@ -92,7 +92,7 @@ test("typing works whether or not the text box got the keyboard", async () => {
   // Real key events, sent where the keyboard is: the box if it took focus, else the pane.
   const send = (key, m = {}) => { const n = find(ui.tree(), n => n.kind === "input"); if (n?.state.focused) n.state.type(n.state.value() + (key === "space" ? " " : key), ui.cx.async); else ui.key(key, m); };
   for (const k of ["H", "i", "space", "y", "o"]) send(k, k === "H" ? { shift: true } : {});
-  ui.key("enter");
+  ui.key("escape");                                       // Excalidraw: Escape finishes (Enter adds a line)
   expect(ui.view.ed.doc.live().some(e => e.type === "text" && e.text === "Hi yo")).toBe(true);
   // And when it did take the keyboard after the frame:
   ui.dblclick([170, 460]);
@@ -100,14 +100,25 @@ test("typing works whether or not the text box got the keyboard", async () => {
   expect(find(ui.tree(), n => n.kind === "input").state.focused).toBe(true);
 });
 
-test("multi-line text: the editor is a textarea; shift-Enter adds a line, Escape finishes", async () => {
+test("multi-line text, Excalidraw keys: Enter adds a line; ⌘Enter or Escape finishes", async () => {
   const ui = await open();
   ui.key("t"); ui.on("on_mouse_down:left", ui.ev(300, 520)); ui.on("on_mouse_up:left", ui.ev(300, 520));
   const box = find(ui.tree(), n => n.kind === "input");
   expect(box.multiline).toBe(true);
-  // Keyboard not on the box yet: the pane types into it.
-  ui.key("a"); ui.key("enter", { shift: true }); ui.key("b");
+  // Keyboard not on the box yet: the pane types into it, with the same keys.
+  ui.key("a"); ui.key("enter"); ui.key("b");
   expect(ui.view.ed.text.value).toBe("a\nb");
+  ui.key("enter", { platform: true });
+  expect(ui.view.ed.text).toBe(null);
+  expect(ui.view.ed.doc.live().some(e => e.type === "text" && e.text === "a\nb")).toBe(true);
+  // Box has the keyboard: Enter (a plain submit) adds a line, ⌘Enter finishes.
+  ui.key("t"); ui.on("on_mouse_down:left", ui.ev(300, 620)); ui.on("on_mouse_up:left", ui.ev(300, 620));
+  ui.tree(); await ui.cx.flush(1);
+  ui.input().type("x"); ui.input().submit({});
+  expect(ui.view.ed.text.value).toBe("x\n");
+  ui.input().type("x\ny"); ui.input().submit({ secondary: true });
+  expect(ui.view.ed.doc.live().some(e => e.type === "text" && e.text === "x\ny")).toBe(true);
+  ui.key("t"); ui.on("on_mouse_down:left", ui.ev(300, 520)); ui.on("on_mouse_up:left", ui.ev(300, 520));
   ui.tree(); await ui.cx.flush(1);                        // the box takes the keyboard after the frame
   ui.input().type("a\nb\nc");
   ui.key("escape");                                       // bubbles to the pane: finish

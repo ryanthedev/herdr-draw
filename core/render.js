@@ -6,7 +6,7 @@
 // Colors arrive as #rrggbb or #rrggbbaa; the theme decides what "default ink" is.
 
 import { DEFAULT_STROKE, isShape, isLinear, isLabel } from "./model.js";
-import { bbox, resolvedPoints } from "./geometry.js";
+import { bbox, resolvedPoints, toWorld, angleOf, centerOf } from "./geometry.js";
 import { animState } from "./anim.js";
 import { labelLines } from "./text.js";
 
@@ -27,8 +27,12 @@ export function withAlpha(c, a) {
   return base + Math.round(Math.max(0, Math.min(1, a * prev)) * 255).toString(16).padStart(2, "0");
 }
 
-// Outline of a shape as points (scene coords).
+// Outline of a shape as points (scene coords), rotation included.
 export function outlinePoints(el) {
+  const pts = localOutline(el);
+  return angleOf(el) ? pts.map(([x, y]) => { const w = toWorld(el, { x, y }); return [w.x, w.y]; }) : pts;
+}
+function localOutline(el) {
   const b = bbox(el);
   if (el.type === "rectangle" || el.type === "frame") return [[b.x, b.y], [b.x + b.w, b.y], [b.x + b.w, b.y + b.h], [b.x, b.y + b.h], [b.x, b.y]];
   if (el.type === "diamond") return [[b.x + b.w / 2, b.y], [b.x + b.w, b.y + b.h / 2], [b.x + b.w / 2, b.y + b.h], [b.x, b.y + b.h / 2], [b.x + b.w / 2, b.y]];
@@ -108,10 +112,11 @@ export function paintElement(doc, el, P, view, theme, out, opts = {}) {
       const b = bbox(box), [x0, y0] = Q(b.x, b.y), [x1, y1] = Q(b.x + b.w, b.y + b.h);
       const color = box.backgroundColor !== "transparent" && INK.has(el.strokeColor) ? "#1e1e1e" : ink(el.strokeColor, theme);
       const text = isShape(box) ? labelLines(el, box).join("\n") : el.text;   // labels wrap to their shape
-      out.push({ t: "text", id: el.id, x: x0, y: y0, text, size: el.fontSize * s * (a?.scale ?? 1), color, align: "center", box: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, lineHeight: el.lineHeight ?? 1.25, opacity, reveal: progress });
+      const [cx, cy] = Q(b.x + b.w / 2, b.y + b.h / 2);
+      out.push({ t: "text", id: el.id, angle: angleOf(box), cx, cy, x: x0, y: y0, text, size: el.fontSize * s * (a?.scale ?? 1), color, align: "center", box: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, lineHeight: el.lineHeight ?? 1.25, opacity, reveal: progress });
     } else {
-      const [x, y] = Q(el.x, el.y);
-      out.push({ t: "text", id: el.id, x, y, text: el.text, size: el.fontSize * s * (a?.scale ?? 1), color: ink(el.strokeColor, theme), align: "left", lineHeight: el.lineHeight ?? 1.25, opacity, reveal: progress });
+      const [x, y] = Q(el.x, el.y), c = centerOf(el), [cx, cy] = Q(c.x, c.y);
+      out.push({ t: "text", id: el.id, angle: angleOf(el), cx, cy, x, y, text: el.text, size: el.fontSize * s * (a?.scale ?? 1), color: ink(el.strokeColor, theme), align: "left", lineHeight: el.lineHeight ?? 1.25, opacity, reveal: progress });
     }
     return;
   }

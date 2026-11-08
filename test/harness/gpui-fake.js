@@ -53,9 +53,11 @@ class FakeInput {
   get focused() { return focus.input === this; }
   focus() { if (focus.rendered.has(this)) { focus.input = this; this.handlers.focus?.({}, null); } }
   on(ev, fn) { this.handlers[ev] = fn; return true; }
-  // Test helpers: type and press Enter like a person.
+  replace(text) { this.v += text; }   // inserts at the cursor (the fake's cursor is the end)
+  // Test helpers, matching Herdr's textarea as observed live: Enter (and Shift+Enter) inserts a
+  // line break and then fires submit; ⌘Enter fires submit with { secondary: true }.
   type(text, cx) { this.v = text; this.handlers.change?.({}, cx); }
-  submit(cx) { this.handlers.submit?.({}, cx); }
+  submit(cx, ev = {}) { if (!ev.secondary && this.multiline) { this.v += "\n"; this.handlers.change?.({}, cx); } this.handlers.submit?.(ev, cx); }
 }
 
 export function installFakes({ file, home }) {
@@ -70,7 +72,7 @@ export function installFakes({ file, home }) {
     v_flex: () => makeEl("div", { flex: "col" }),
     h_flex: () => makeEl("div", { flex: "row" }),
     InputState: { new: o => new FakeInput(o) },
-    TextareaState: { new: o => new FakeInput(o) },
+    TextareaState: { new: o => { const s = new FakeInput(o); s.multiline = true; return s; } },
     Textarea: { new: state => { focus.rendered.add(state); return makeEl("input", { state, multiline: true }); } },
     Input: { new: state => { focus.rendered.add(state); return makeEl("input", { state }); } },
   }));

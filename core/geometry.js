@@ -27,6 +27,51 @@ export const inBox = (p, b, pad = 0) => p.x >= b.x - pad && p.x <= b.x + b.w + p
 export const boxInBox = (a, b) => a.x >= b.x && a.y >= b.y && a.x + a.w <= b.x + b.w && a.y + a.h <= b.y + b.h;
 export const center = b => ({ x: b.x + b.w / 2, y: b.y + b.h / 2 });
 
+// ── rotation ──────────────────────────────────────────────────────────────
+// Shapes and text keep Excalidraw's `angle` (radians, clockwise, about the
+// center of their unrotated box). Lines, arrows and pen strokes have their
+// rotation baked into their points instead, so arrow binding stays simple.
+
+export function rotate(p, c, a) {
+  if (!a) return { x: p.x, y: p.y };
+  const s = Math.sin(a), k = Math.cos(a), dx = p.x - c.x, dy = p.y - c.y;
+  return { x: c.x + dx * k - dy * s, y: c.y + dx * s + dy * k };
+}
+export const angleOf = el => (isLinear(el) ? 0 : el.angle || 0);
+export const centerOf = el => center(bbox(el));
+// A scene point in the element's own unrotated frame.
+export const toLocal = (el, p) => rotate(p, centerOf(el), -angleOf(el));
+export const toWorld = (el, p) => rotate(p, centerOf(el), angleOf(el));
+
+// The four corners of the element's box, rotated.
+export function corners(el) {
+  const b = bbox(el);
+  return [[b.x, b.y], [b.x + b.w, b.y], [b.x + b.w, b.y + b.h], [b.x, b.y + b.h]].map(([x, y]) => toWorld(el, { x, y }));
+}
+
+// The axis-aligned box around the element as drawn (rotation included).
+export function bounds(el) {
+  if (!angleOf(el)) return bbox(el);
+  const cs = corners(el), xs = cs.map(c => c.x), ys = cs.map(c => c.y);
+  return { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+}
+
+// Turn an element by `da` about point `c` (a group's center): shapes move their
+// center and add to their angle; linear elements rotate their points.
+export function rotateAbout(el, orig, c, da) {
+  if (isLinear(orig)) {
+    const pts = orig.points.map(p => rotate({ x: orig.x + p[0], y: orig.y + p[1] }, c, da));
+    el.x = pts[0].x; el.y = pts[0].y;
+    el.points = pts.map(p => [p.x - pts[0].x, p.y - pts[0].y]);
+    const b = bbox(el); el.width = b.w; el.height = b.h;
+    return;
+  }
+  const oc = centerOf(orig), nc = rotate(oc, c, da), b = bbox(orig);
+  el.x = nc.x - b.w / 2; el.y = nc.y - b.h / 2;
+  el.angle = normAngle((orig.angle || 0) + da);
+}
+export function normAngle(a) { const t = Math.PI * 2; a %= t; if (a < 0) a += t; return Math.abs(a) < 1e-9 || Math.abs(a - t) < 1e-9 ? 0 : a; }
+
 // Make width/height positive and linear boxes match their points.
 export function normalize(el) {
   if (isShape(el) || el.type === "text") {
@@ -50,6 +95,7 @@ export function distToSeg(px, py, ax, ay, bx, by) {
 
 // Distance from p to a shape's outline, negative inside.
 export function outlineDistance(el, p) {
+  p = toLocal(el, p);
   const b = bbox(el), c = center(b), rx = b.w / 2 || 1, ry = b.h / 2 || 1;
   const dx = p.x - c.x, dy = p.y - c.y;
   if (el.type === "ellipse") return (Math.hypot(dx / rx, dy / ry) - 1) * Math.min(rx, ry);
@@ -68,8 +114,8 @@ export function hits(doc, el, p, tol) {
     for (let j = 1; j < pts.length; j++) if (distToSeg(p.x, p.y, pts[j - 1][0], pts[j - 1][1], pts[j][0], pts[j][1]) <= tol + el.strokeWidth) return true;
     return false;
   }
-  if (el.type === "text") return inBox(p, bbox(el), tol);
-  if (el.type === "frame") { const b = bbox(el); return inBox(p, { x: b.x, y: b.y - 24, w: b.w, h: 24 }) || Math.abs(outlineDistance(el, p)) <= tol; }
+  if (el.type === "text") return inBox(toLocal(el, p), bbox(el), tol);
+  if (el.type === "frame") { const b = bbox(el); return inBox(toLocal(el, p), { x: b.x, y: b.y - 24, w: b.w, h: 24 }) || Math.abs(outlineDistance(el, p)) <= tol; }
   const d = outlineDistance(el, p);
   if (Math.abs(d) <= tol + el.strokeWidth) return true;
   if (d < 0 && (el.backgroundColor !== "transparent" || doc.labelOf(el))) return true;
@@ -98,13 +144,18 @@ export function shapeAt(doc, p, except) {
   for (let i = els.length - 1; i >= 0; i--) {
     const el = els[i];
     if (!isShape(el) || el.type === "frame" || el.id === except) continue;
-    if (inBox(p, bbox(el), 4)) return el;
+    if (inBox(toLocal(el, p), bbox(el), 4)) return el;
   }
   return null;
 }
 
 // Where a ray from a shape's center toward (tx, ty) leaves its outline, plus gap.
 export function edgePoint(el, tx, ty, gap = 6) {
+  const a = angleOf(el);
+  if (a) {   // work in the shape's own frame, then turn the answer back
+    const t = toLocal(el, { x: tx, y: ty }), q = edgePoint({ ...el, angle: 0 }, t.x, t.y, gap), w = toWorld(el, { x: q[0], y: q[1] });
+    return [w.x, w.y];
+  }
   const b = bbox(el), c = center(b), rx = b.w / 2 || 1, ry = b.h / 2 || 1;
   const dx = tx - c.x, dy = ty - c.y, len = Math.hypot(dx, dy) || 1;
   let t;

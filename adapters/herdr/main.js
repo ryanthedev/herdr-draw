@@ -33,10 +33,17 @@ export default class Draw extends View {
     this.tick = null; this.size = { w: 900, h: 600 }; this.measured = false;   // a default size so panels render before layout this.textOpen = false; this.renaming = null;
     this.handle = cx.focus_handle();
     // Multi-line: a submit with ⌘ (or any submit, if Enter submits) commits; Escape or a click outside commits too.
-    this.input = TextareaState.new({ value: "", placeholder: "Type… (⌘⏎ or Esc to finish)", rows: 1 });
+    this.input = TextareaState.new({ value: "", placeholder: "Type… (Esc or ⌘⏎ to finish)", rows: 1 });
     this.input.set_auto_grow?.(1, 10);
     this.input.on("change", (_e, cx) => { this.ed.setText(this.input.value()); this.after(cx); });
-    this.input.on("submit", (_e, cx) => { this.ed.commitText(); this.after(cx); });
+    // Herdr's textarea, seen live in a test window: Enter and Shift+Enter insert a line break AND
+    // fire "submit"; ⌘Enter fires submit with `secondary`. Excalidraw's keys are Enter = new line,
+    // ⌘Enter / Escape = finish, so only a secondary submit finishes; a plain one keeps its line break.
+    this.input.on("submit", (e, cx) => {
+      if (e?.secondary) this.ed.commitText();
+      else this.ed.setText(this.input.value());
+      this.after(cx);
+    });
     this.input.on("focus", () => { this.inputFocused = true; });
     this.input.on("blur", (_e, cx) => { this.inputFocused = false; if (this.ed.text) { this.ed.commitText(); this.after(cx); } });
     this.layerInput = InputState.new({ value: "", placeholder: "Layer name" });
@@ -53,6 +60,7 @@ export default class Draw extends View {
         const c = await nextCommand();
         if (c === "fit") this.ed.fit();
         else if (c === "play") this.ed.playToggle();
+        else if (c === "write") this.ed.beginText(null, this.ed.toWorld({ x: this.size.w / 3, y: this.size.h / 3 }));   // start typing (no mouse needed)
         else if (c === "focus") { cx.timer.after(60, () => { if (panes().find(q => q.focused)?.mod === MOD) this.handle.focus(); }); continue; }
         this.after(cx);
       }
@@ -103,10 +111,10 @@ export default class Draw extends View {
   // Typing while the text box doesn't have the keyboard: type into it from here.
   typeFallback(e, cx) {
     const m = e.modifiers ?? {}, v = this.input.value();
-    if (m.platform || m.control) return false;
     let next = null;
-    if (e.key === "enter" && m.shift) next = v + "\n";
-    else if (e.key === "enter") { this.ed.commitText(); this.after(cx); return true; }
+    if (e.key === "enter" && (m.platform || m.control)) { this.ed.commitText(); this.after(cx); return true; }
+    if (m.platform || m.control) return false;
+    if (e.key === "enter") next = v + "\n";
     if (e.key === "escape") { this.ed.commitText(); this.after(cx); return true; }
     else if (e.key === "backspace") next = v.slice(0, -1);
     else if (e.key === "space") next = v + " ";
@@ -326,7 +334,12 @@ export default class Draw extends View {
         .child(this.chip(t, "grp", "group", false, "Group (⌘G)", () => ed.group(), 44))
         .child(this.chip(t, "ugrp", "ungroup", false, "Ungroup (⌘⇧G)", () => ed.ungroup(), 54))
         .child(this.chip(t, "dup", "dup", false, "Duplicate (⌘D)", () => ed.cloneSelection(20, 20), 34))
-        .child(this.chip(t, "lk", "lock", ed.selected().some(e => e.locked), "Lock (⌘⇧L)", () => ed.toggleLock(), 36)));
+        .child(this.chip(t, "lk", "lock", ed.selected().some(e => e.locked), "Lock (⌘⇧L)", () => ed.toggleLock(), 36)))
+      .child(h_flex().gap(4)
+        .child(this.chip(t, "rl", "⟲ 15°", false, "Rotate left 15° (<)", () => ed.rotateBy(-15), 44))
+        .child(this.chip(t, "rr", "⟳ 15°", false, "Rotate right 15° (>)", () => ed.rotateBy(15), 44))
+        .child(this.chip(t, "r90", "⟳ 90°", false, "Rotate 90°", () => ed.rotateBy(90), 44))
+        .child(this.chip(t, "r0", "0°", false, "Reset rotation", () => ed.resetRotation(), 30)));
     return this.section(t, "Arrange", body);
   }
 

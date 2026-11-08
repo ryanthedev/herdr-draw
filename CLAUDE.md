@@ -31,11 +31,27 @@ Herdr-draw data lives where Excalidraw keeps foreign data: `customData.{layer,z,
 
 ## Dev loop
 
-- `bun test` (27 tests). Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
+- `bun test` (50 tests). Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
 - `scripts/dev-sync.sh` builds `build/herdr-draw` (adapter + core + svg + drawh) and installs a **copy** into `~/.config/herdr-app/mods/herdr-draw`.
 - See the real window only with `herdr-app shot` (passive). **Never drive the person's mouse or keyboard** to test (theGrid input tools land in whatever app is focused).
 
+## Testing in a real Herdr window (never the person's)
+
+`open -g -n -a Herdr --env HERDR_APP_HOME=$HOME/.cache/hdt` starts a separate window on its own home
+(keep the path short: the socket path has a length limit). Give that home `shared.json`
+`{"layout":"drawtest","frame.welcomed":"finished"}` and a `layouts/drawtest.json` whose root is a
+block with `{"mod":"herdr-draw","props":{"file":...}}`. Show the board as a layout block, never
+`tab.new`/`pane.split`: spaces and tabs are shared with the person's window through herdr-core.
+Drive it with `HERDR_APP_HOME=... herdr-app do herdr-draw.<fit|play|write>`, `herdr-app shot`, and key input
+sent only to that window's id; quit it by its pid when done.
+
 ## Gotchas
+
+- Herdr's Textarea (verified live): Enter and Shift+Enter insert a line break **and** fire `submit`;
+  ⌘Enter fires `submit` with `secondary`. So only a secondary submit finishes text (Excalidraw keys).
+- A rebuilt mod can fail to reload in place in an open pane with `Null"null"` in `herdr-app status`
+  while fresh loads and reloads in a test window work (herdr-md hit the same message). The old build keeps
+  running in that pane; reopening the pane loads the new one.
 
 - Never keep an event's `cx` past its handler (stored in a closure, `.then()` on it, handed to a timer later): GPUI rejects it (see `Context` in `gpui-kit.d.ts`). Use the async `cx` from `cx.spawn`/timer callbacks. `test/harness/gpui-fake.js` throws `stale cx` when this happens.
 - `appState.herdr` (layers, grid) has no version: if the pane changes layers and `drawh` writes within the 250 ms save window, the layer change can be lost (elements survive on the base layer).
@@ -45,5 +61,5 @@ Herdr-draw data lives where Excalidraw keeps foreign data: `customData.{layer,z,
 - `"transparent"` is not a GPUI color: use `#00000000`.
 - Coordinates: GPUI event positions are zoomed px; divide by `settings().zoom`. Paths and `left/top` use the same zoom-1 units.
 - Text is drawn as divs above all paths (no text-in-path API), so text always paints over shapes.
-- No rotation yet (`angle` stays 0).
+- Rotation: shapes and text keep `angle`; lines, arrows and pen strokes bake it into their points. Herdr can't rotate text, so text stays upright in the pane (SVG export rotates it).
 - Writers other than the pane must bump `version` on every element they change (drawh does), or the pane may keep its copy.
