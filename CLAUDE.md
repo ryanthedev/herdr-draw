@@ -12,6 +12,7 @@ core/            pure JS, no imports from Herdr, the DOM, Node or the network
   geometry.js    boxes, hit testing, arrow binding, resize mapping
   render.js      board → display list (paths + text + images, screen coords)
   export.js      the drawing cropped to what's painted, any pixel ratio, on the board's page color
+  library.js     .excalidrawlib read (v1, v2) / write (v2); Editor.insertElements is the one insert path (paste, library)
   anim.js        timeline presets / keyframes → per-element state at time t
   editor.js      tools, gestures, selection, undo, layers, align, clipboard, commands
 adapters/herdr/  the Herdr mod: GPUI events → editor; display list → GPUI. store.js = file port
@@ -32,7 +33,7 @@ Herdr-draw data lives where Excalidraw keeps foreign data: `customData.{layer,z,
 
 ## Dev loop
 
-- `bun test` (103 tests). `drawh mermaid` runs core/mermaid.js through node (or bun), so agents and the pane lay out alike. Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
+- `bun test` (113 tests). `drawh mermaid` runs core/mermaid.js through node (or bun), so agents and the pane lay out alike. Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
 - `scripts/dev-sync.sh` builds `build/herdr-draw` (adapter + core + svg + drawh) and installs a **copy** into `~/.config/herdr-app/mods/herdr-draw`.
 - See the real window only with `herdr-app shot` (passive). **Never drive the person's mouse or keyboard** to test (theGrid input tools land in whatever app is focused).
 
@@ -76,4 +77,7 @@ sent only to that window's id; quit it by its pid when done.
   macOS `sips` (verified live; QuickLook crops to a square). Raster exports pass `svgImages: false` to `toSvg`: only pictures whose
   bytes match their declared PNG/JPEG/GIF/WebP type go to sips, so a board's SVG can't make it fetch files or URLs.
   Give an SVG background explicit width/height, never `100%`: sips sized it from the pixel size and left a 2× PNG mostly black.
+- Library file: `<appHome>/herdr-draw/library.excalidrawlib` (pane and `drawh lib`; `HERDR_APP_HOME` picks the test home's).
+  Items carry their pictures' `files` (a herdr extension: excalidraw.com shows library pictures as placeholders). Sidebar
+  previews draw paths only, no text or pictures.
 - Writers other than the pane must bump `version` on every element they change (drawh does), or the pane may keep its copy.
