@@ -1,6 +1,7 @@
 // Geometry on scene coordinates: boxes, hit testing, arrow binding, transforms.
 
 import { isShape, isLinear, isLabel, textSize } from "./model.js";
+import { elbowRoute } from "./elbow.js";
 
 export function bbox(el) {
   if (isLinear(el)) {
@@ -171,6 +172,18 @@ export function resolvedPoints(doc, el) {
   const pts = el.points.map(p => [p[0] + el.x, p[1] + el.y]);
   if (el.type === "freedraw" || pts.length < 2) return pts;
   const s = el.startBinding && doc.get(el.startBinding.elementId), e = el.endBinding && doc.get(el.endBinding.elementId);
+  if (el.elbowed) {   // right angles, routed from the ends (bound shapes, or the first/last points), around other shapes
+    const key = `${doc.rev}|${el.id}|${el.version}`;
+    const memo = (doc._elbow ??= new Map());
+    if (memo.get(el.id)?.key === key) return memo.get(el.id).pts.map(p => [...p]);
+    const end = p => ({ point: { x: p[0], y: p[1] } });
+    const fromBox = s ? bounds(s) : null, toBox = e ? bounds(e) : null;
+    const obstacles = doc.visible().filter(o => isShape(o) && o.type !== "frame" && o !== s && o !== e).map(bounds);
+    const r = elbowRoute(fromBox ? { box: fromBox } : end(pts[0]), toBox ? { box: toBox } : end(pts[pts.length - 1]), el.startBinding?.gap ?? el.endBinding?.gap ?? 6, obstacles);
+    const out = r.points.map(p => [p.x, p.y]);
+    memo.set(el.id, { key, pts: out });
+    return out.map(p => [...p]);
+  }
   const cOf = x => { const c = center(bbox(x)); return [c.x, c.y]; };
   if (s) { const to = e && pts.length === 2 ? cOf(e) : pts[1]; pts[0] = edgePoint(s, to[0], to[1], el.startBinding.gap ?? 6); }
   if (e) { const from = s && pts.length === 2 ? cOf(s) : pts[pts.length - 2]; pts[pts.length - 1] = edgePoint(e, from[0], from[1], el.endBinding.gap ?? 6); }
@@ -179,7 +192,7 @@ export function resolvedPoints(doc, el) {
 
 // Bake resolved arrow geometry into the element, so other tools see it right.
 export function settle(doc, el) {
-  if ((el.type !== "arrow" && el.type !== "line") || (!el.startBinding && !el.endBinding)) return false;
+  if ((el.type !== "arrow" && el.type !== "line") || (!el.startBinding && !el.endBinding && !el.elbowed)) return false;
   const pts = resolvedPoints(doc, el);
   const next = pts.map(p => [p[0] - pts[0][0], p[1] - pts[0][1]]);
   if (el.x === pts[0][0] && el.y === pts[0][1] && JSON.stringify(next) === JSON.stringify(el.points)) return false;
@@ -200,6 +213,18 @@ export function mapIntoBox(el, orig, from, to) {
     el.x = mx(orig.x); el.y = my(orig.y); el.width = orig.width * sx; el.height = orig.height * sy;
     if (el.type === "text" && !el.containerId) el.fontSize = Math.max(6, orig.fontSize * Math.min(Math.abs(sx), Math.abs(sy)));
   }
+}
+
+// The point a fraction of the way along a polyline (by length): where an arrow's label sits.
+export function alongPath(pts, f = 0.5) {
+  let total = 0; for (let i = 1; i < pts.length; i++) total += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+  let left = total * f;
+  for (let i = 1; i < pts.length; i++) {
+    const seg = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+    if (seg >= left) { const k = seg ? left / seg : 0; return [pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * k, pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * k]; }
+    left -= seg;
+  }
+  return pts[pts.length - 1];
 }
 
 export function segmentsIntersect(a, b, c, d) {

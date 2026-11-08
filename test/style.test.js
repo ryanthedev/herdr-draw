@@ -82,3 +82,13 @@ test("snapshot: the excalidraw.com fixture", async () => {
   expect(svg).toContain("Cascadia");
   expect(svg).toContain("Excalifont");
 });
+
+test("hostile sizes can't make hatching loop forever", () => {
+  const huge = [[0, 0], [1e12, 0], [1e12, 1e12], [0, 1e12]];
+  const t0 = Date.now();
+  expect(hatchLines(huge, -0.7, 8).length).toBeLessThanOrEqual(1500);
+  expect(Date.now() - t0).toBeLessThan(1000);
+  expect(hatchLines([[0, 0], [NaN, 0], [5, 5]], 0, 8)).toEqual([]);
+  expect(hatchLines([[0, 0], [Infinity, 0], [5, 5]], 0, 8)).toEqual([]);
+  expect(hatchLines([[0, 0], [10, 0], [10, 10]], 0, 0)).toEqual([]);
+});

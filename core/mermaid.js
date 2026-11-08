@@ -10,6 +10,7 @@
 
 import { makeElement } from "./model.js";
 import { edgePoint } from "./geometry.js";
+import { elbowRoute } from "./elbow.js";
 import { labelHostHeight, wrapLines, CHAR_W } from "./text.js";
 
 const SHAPES = [
@@ -177,7 +178,7 @@ export function layoutGraph(g) {
 }
 
 // Build elements at `origin` (scene coords of the diagram's top-left).
-export function mermaidToElements(src, { origin = { x: 0, y: 0 }, layer = "base", z = 0 } = {}) {
+export function mermaidToElements(src, { origin = { x: 0, y: 0 }, layer = "base", z = 0, elbow = false } = {}) {
   const g = parseMermaid(src), place = layoutGraph(g), els = [], idOf = new Map();
   let zz = z;
   const cd = () => ({ layer, z: ++zz });
@@ -227,9 +228,12 @@ export function mermaidToElements(src, { origin = { x: 0, y: 0 }, layer = "base"
     const s = idOf.get(e.from), t = idOf.get(e.to); if (!s || !t) continue;
     // Store the arrow already clipped to both outlines, so other tools draw it right too.
     const sc = [s.x + s.width / 2, s.y + s.height / 2], tc = [t.x + t.width / 2, t.y + t.height / 2];
-    const p0 = edgePoint(s, tc[0], tc[1]), p1 = edgePoint(t, sc[0], sc[1]);
+    const box = el => ({ x: el.x, y: el.y, w: el.width, h: el.height });
+    const route = elbow && e.head ? elbowRoute({ box: box(s) }, { box: box(t) }).points.map(p => [p.x, p.y]) : [edgePoint(s, tc[0], tc[1]), edgePoint(t, sc[0], sc[1])];
+    const p0 = route[0], xs = route.map(p => p[0]), ys = route.map(p => p[1]);
     const a = makeElement(e.head ? "arrow" : "line", {
-      x: p0[0], y: p0[1], points: [[0, 0], [p1[0] - p0[0], p1[1] - p0[1]]], width: Math.abs(p1[0] - p0[0]), height: Math.abs(p1[1] - p0[1]),
+      x: p0[0], y: p0[1], points: route.map(p => [p[0] - p0[0], p[1] - p0[1]]), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys),
+      elbowed: !!(elbow && e.head),
       startBinding: { elementId: s.id, focus: 0, gap: 6 }, endBinding: { elementId: t.id, focus: 0, gap: 6 },
       endArrowhead: e.head ? "arrow" : null, strokeStyle: e.style === "dashed" ? "dashed" : "solid", strokeWidth: e.style === "thick" ? 4 : 2,
       customData: cd(),

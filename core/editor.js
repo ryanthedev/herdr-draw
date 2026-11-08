@@ -51,7 +51,7 @@ export class Editor {
     this.tool = "select"; this.toolLock = false;
     this.sel = new Set();
     this.view = { x: 40, y: 40, scale: 1 }; this.size = { w: 800, h: 600 };
-    this.style = { strokeColor: DEFAULT_STROKE, backgroundColor: "transparent", fillStyle: "solid", strokeWidth: 2, strokeStyle: "solid", roughness: 1, opacity: 100, fontSize: 20, fontFamily: 2, roundness: null };
+    this.style = { strokeColor: DEFAULT_STROKE, backgroundColor: "transparent", fillStyle: "solid", strokeWidth: 2, strokeStyle: "solid", roughness: 1, opacity: 100, fontSize: 20, fontFamily: 2, roundness: null, elbowed: false };
     this.activeLayer = this.doc.layers[this.doc.layers.length - 1].id;
     this.undoStack = []; this.redoStack = [];
     this.g = null;               // the gesture in progress
@@ -180,7 +180,10 @@ export class Editor {
   handles() {
     const els = this.selected().filter(e => this.doc.editable(e));
     if (els.length === 1 && isLinear(els[0]) && els[0].type !== "freedraw") {
-      return resolvedPoints(this.doc, els[0]).map((p, i) => ({ kind: "point", i, ...this.toScreen({ x: p[0], y: p[1] }) }));
+      const pts = resolvedPoints(this.doc, els[0]);
+      // An elbow's bends are routed, not placed: only its two ends have handles.
+      if (els[0].elbowed) return [[0, pts[0]], [els[0].points.length - 1, pts[pts.length - 1]]].map(([i, p]) => ({ kind: "point", i, ...this.toScreen({ x: p[0], y: p[1] }) }));
+      return pts.map((p, i) => ({ kind: "point", i, ...this.toScreen({ x: p[0], y: p[1] }) }));
     }
     const f = this.selFrame(); if (!f || !els.length) return [];
     const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
@@ -266,6 +269,7 @@ export class Editor {
     const fields = { x: at.x, y: at.y, strokeColor: s.strokeColor, backgroundColor: isShape({ type: this.tool }) ? s.backgroundColor : "transparent", fillStyle: s.fillStyle, strokeWidth: s.strokeWidth, strokeStyle: s.strokeStyle, roughness: s.roughness, opacity: s.opacity, roundness: this.tool === "rectangle" || this.tool === "diamond" || this.tool === "line" || this.tool === "arrow" ? s.roundness : null };
     if (this.tool === "arrow" || this.tool === "line") {
       fields.points = [[0, 0], [0, 0]];
+      if (this.tool === "arrow" && s.elbowed) { fields.elbowed = true; fields.roundness = null; }
       const target = shapeAt(this.doc, w);
       if (target) fields.startBinding = { elementId: target.id, focus: 0, gap: 6 };
     }
@@ -708,8 +712,8 @@ export class Editor {
   }
 
   // A Mermaid flowchart becomes editable shapes, laid out, centered at `at`; returns the new ids.
-  importMermaid(src, at = this.toWorld({ x: this.size.w / 2, y: this.size.h / 2 })) {
-    const { elements } = mermaidToElements(src, { layer: this.activeLayer, z: this.doc.maxZ(this.activeLayer) });
+  importMermaid(src, at = this.toWorld({ x: this.size.w / 2, y: this.size.h / 2 }), { elbow = this.style.elbowed } = {}) {
+    const { elements } = mermaidToElements(src, { layer: this.activeLayer, z: this.doc.maxZ(this.activeLayer), elbow });
     const box = unionBox(elements.filter(e => e.type !== "text").map(bbox));
     const dx = at.x - (box.x + box.w / 2), dy = at.y - (box.y + box.h / 2);
     this.transact(tx => { for (const e of elements) { e.x += dx; e.y += dy; tx.add(e); } });
@@ -826,6 +830,12 @@ export class Editor {
           }
           if ((k === "backgroundColor" || k === "fillStyle") && !isShape(c)) continue;
           if (k === "roundness" && !["rectangle", "diamond", "arrow", "line"].includes(c.type)) continue;
+          if (k === "elbowed") {   // arrow type: elbow arrows are routed; turning it off keeps the current bends
+            if (c.type !== "arrow") continue;
+            if (!v && c.elbowed) { const pts = resolvedPoints(this.doc, e); c.x = pts[0][0]; c.y = pts[0][1]; c.points = pts.map(p => [p[0] - c.x, p[1] - c.y]); }
+            c.elbowed = v; if (v) c.roundness = null;
+            continue;
+          }
           if (k === "endArrowhead" || k === "startArrowhead") { if (c.type === "arrow" || c.type === "line") c[k] = v; continue; }
           c[k] = v;
           if (k === "strokeColor") { const l = isShape(e) && this.doc.labelOf(e); if (l) tx.get(l.id).strokeColor = v; }

@@ -31,13 +31,17 @@ export function roundPolygon(corners, radius, steps = 6) {
 
 // Parallel lines filling a polygon (screen points), at `angle` radians, `gap` apart.
 // Returns segments [[x1, y1], [x2, y2]].
+// Board files come from anywhere: non-finite sizes give no lines, and a huge shape
+// (or extreme zoom) widens the gap so there are never more than MAX_HATCH lines.
+const MAX_HATCH = 1500;
 export function hatchLines(poly, angle, gap) {
-  if (poly.length < 3 || gap <= 0) return [];
+  if (poly.length < 3 || !(gap > 0) || !Number.isFinite(angle) || poly.some(p => !Number.isFinite(p[0]) || !Number.isFinite(p[1]))) return [];
   const c = Math.cos(-angle), s = Math.sin(-angle);
   const rot = ([x, y]) => [x * c - y * s, x * s + y * c];
   const back = ([x, y]) => [x * c + y * s, -x * s + y * c];
   const p = poly.map(rot);
   const ys = p.map(q => q[1]), y0 = Math.min(...ys), y1 = Math.max(...ys), out = [];
+  if ((y1 - y0) / gap > MAX_HATCH) gap = (y1 - y0) / MAX_HATCH;
   for (let y = y0 + gap / 2; y < y1; y += gap) {
     const xs = [];
     for (let i = 0; i < p.length; i++) {

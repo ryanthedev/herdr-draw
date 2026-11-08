@@ -10,12 +10,12 @@ Coordinates are scene pixels, x right, y down. Shapes are 140x80 unless --w/--h.
             [--color red|green|blue|orange|purple|default] [--fill red|green|blue|yellow|purple]
             [--dashed]                          add a shape; prints its id
   drawh text FILE --at X,Y TEXT [--size 20] [--color C]
-  drawh arrow FILE FROM TO [--label TEXT] [--line] [--dashed] [--color C]
+  drawh arrow FILE FROM TO [--label TEXT] [--line] [--elbow] [--dashed] [--color C]
                                                 connect two element ids (or labels); the pane routes it
   drawh label FILE ID TEXT                      set or replace a shape's label
   drawh move FILE ID --at X,Y | --by DX,DY
   drawh style FILE ID [--color C] [--fill C|none] [--dashed|--solid]
-  drawh mermaid FILE [SRC] [--at X,Y]          import a Mermaid flowchart (file, or - / nothing for stdin) as
+  drawh mermaid FILE [SRC] [--at X,Y] [--elbow]         import a Mermaid flowchart (file, or - / nothing for stdin) as
                                                 editable, laid-out shapes and bound arrows; prints the new ids
   drawh rotate FILE ID... DEG                   turn elements by DEG degrees (clockwise) about their center
   drawh rm FILE ID...                           delete elements (and their labels)
@@ -106,15 +106,15 @@ def place(scene, el, layer=None):
     return el
 
 
-def mermaid_elements(src):
+def mermaid_elements(src, elbow=False):
     """Run the board's own Mermaid importer (core/mermaid.js) so agents and the pane lay out alike."""
     here = os.path.dirname(os.path.realpath(__file__))
     core = next((c for c in (os.path.join(here, "core"), os.path.join(here, "..", "core")) if os.path.exists(os.path.join(c, "mermaid.js"))), None)
     if not core:
         die("can't find core/mermaid.js next to drawh")
     script = ("import { mermaidToElements } from %s; let s = ''; process.stdin.on('data', d => s += d);"
-              "process.stdin.on('end', () => { try { process.stdout.write(JSON.stringify(mermaidToElements(s).elements)); }"
-              " catch (e) { process.stderr.write(String(e.message || e)); process.exit(2); } });") % json.dumps("file://" + os.path.join(os.path.abspath(core), "mermaid.js"))
+              "process.stdin.on('end', () => { try { process.stdout.write(JSON.stringify(mermaidToElements(s, { elbow: %s }).elements)); }"
+              " catch (e) { process.stderr.write(String(e.message || e)); process.exit(2); } });") % (json.dumps("file://" + os.path.join(os.path.abspath(core), "mermaid.js")), "true" if elbow else "false")
     for runtime in (["node", "--input-type=module", "-e", script], ["bun", "-e", script]):
         try:
             r = subprocess.run(runtime, input=src, capture_output=True, text=True)
@@ -227,12 +227,12 @@ def main():
     t = sub.add_parser("text"); t.add_argument("file"); t.add_argument("text"); t.add_argument("--at", required=True)
     t.add_argument("--size", type=int, default=20); t.add_argument("--color")
     r = sub.add_parser("arrow"); r.add_argument("file"); r.add_argument("frm"); r.add_argument("to")
-    r.add_argument("--label"); r.add_argument("--line", action="store_true"); r.add_argument("--dashed", action="store_true"); r.add_argument("--color")
+    r.add_argument("--label"); r.add_argument("--line", action="store_true"); r.add_argument("--elbow", action="store_true"); r.add_argument("--dashed", action="store_true"); r.add_argument("--color")
     lb = sub.add_parser("label"); lb.add_argument("file"); lb.add_argument("id"); lb.add_argument("text")
     m = sub.add_parser("move"); m.add_argument("file"); m.add_argument("id"); m.add_argument("--at"); m.add_argument("--by")
     s = sub.add_parser("style"); s.add_argument("file"); s.add_argument("id"); s.add_argument("--color"); s.add_argument("--fill")
     s.add_argument("--dashed", action="store_true"); s.add_argument("--solid", action="store_true")
-    mm = sub.add_parser("mermaid"); mm.add_argument("file"); mm.add_argument("src", nargs="?", default="-"); mm.add_argument("--at"); mm.add_argument("--layer")
+    mm = sub.add_parser("mermaid"); mm.add_argument("file"); mm.add_argument("src", nargs="?", default="-"); mm.add_argument("--at"); mm.add_argument("--layer"); mm.add_argument("--elbow", action="store_true")
     ro = sub.add_parser("rotate"); ro.add_argument("file"); ro.add_argument("ids", nargs="+"); ro.add_argument("deg", type=float)
     a.add_argument("--angle", type=float, default=0, help="degrees, clockwise")
     rm = sub.add_parser("rm"); rm.add_argument("file"); rm.add_argument("ids", nargs="+")
@@ -317,6 +317,7 @@ def main():
                   startArrowhead=None, endArrowhead=None if args.line else "arrow")
         if args.dashed: el["strokeStyle"] = "dashed"
         if args.color: el["strokeColor"] = color(args.color)
+        if args.elbow and not args.line: el["elbowed"] = True   # the pane routes it with right angles
         lid = s.get("customData", {}).get("layer", "base")
         place(scene, el, next((l["name"] for l in layers(scene) if l["id"] == lid), None))
         for t_ in (s, e):
@@ -402,7 +403,7 @@ def main():
             t_ += args.stagger
     elif args.cmd == "mermaid":
         src = sys.stdin.read() if args.src == "-" else open(os.path.expanduser(args.src)).read()
-        els = mermaid_elements(src)
+        els = mermaid_elements(src, elbow=args.elbow)
         boxes = [e for e in live(scene) if not (e["type"] == "text" and e.get("containerId"))]   # free text counts too
         if args.at:
             ox, oy = pair(args.at, "--at")

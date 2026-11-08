@@ -330,6 +330,12 @@ export default class Draw extends View {
       .child(row("Edges", [["sharp", null], ["round", { type: 3 }]].map(([lab, v]) => this.chip(t, `rd-${lab}`, lab, !!s("roundness") === !!v, `${lab} corners / curves`, () => ed.setStyle({ roundness: v }), 44))))
       .child(row("Font", Object.keys(FONT_FAMILY).map(f => this.chip(t, `ff-${f}`, f, (ed.selected()[0] && (ed.selected()[0].type === "text" ? ed.selected()[0].fontFamily : ed.doc.labelOf(ed.selected()[0])?.fontFamily) || ed.style.fontFamily) === FONT_FAMILY[f], `Font: ${f}`, () => ed.setStyle({ fontFamily: FONT_FAMILY[f] }), 40))))
       .child(row("Text", [16, 20, 28, 36].map(f => this.chip(t, `fs-${f}`, `${f}`, (ed.selectedFont() ?? ed.style.fontSize) === f, `Font size ${f} (= and -)`, () => ed.setStyle({ fontSize: f })))));
+    const arrowSel = ed.selected().find(e => e.type === "arrow");
+    if (arrowSel || ed.tool === "arrow") {
+      const kind = a => (a?.elbowed ? "elbow" : a?.roundness ? "curve" : "sharp"), cur = arrowSel ? kind(arrowSel) : kind(ed.style);
+      body.child(row("Arrow", [["sharp", { elbowed: false, roundness: null }], ["curve", { elbowed: false, roundness: { type: 2 } }], ["elbow", { elbowed: true, roundness: null }]].map(([lab, patch]) =>
+        this.chip(t, `at-${lab}`, { sharp: "╱", curve: "◠", elbow: "┐" }[lab] + " " + lab, cur === lab, `Arrow type: ${lab}`, () => ed.setStyle(patch), 50))));
+    }
     if (ed.selected().some(e => e.type === "arrow" || e.type === "line")) {
       body.child(row("Heads", [["none", null, null], ["→", null, "arrow"], ["↔", "arrow", "arrow"], ["▶", null, "triangle"], ["▷", null, "triangle_outline"], ["●", null, "dot"], ["◆", null, "diamond"], ["⊣", null, "bar"]].map(([lab, a, b], i) =>
         this.chip(t, `ah-${i}`, lab, (s("startArrowhead") ?? null) === a && (s("endArrowhead") ?? null) === b, `Arrowheads: ${b ?? "none"}`, () => ed.setStyle({ startArrowhead: a, endArrowhead: b }), 26))));

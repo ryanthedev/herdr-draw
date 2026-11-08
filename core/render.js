@@ -6,7 +6,7 @@
 // Colors arrive as #rrggbb or #rrggbbaa; the theme decides what "default ink" is.
 
 import { DEFAULT_STROKE, isShape, isLinear, isLabel } from "./model.js";
-import { bbox, resolvedPoints, toWorld, angleOf, centerOf } from "./geometry.js";
+import { bbox, resolvedPoints, toWorld, angleOf, centerOf, alongPath } from "./geometry.js";
 import { animState } from "./anim.js";
 import { labelLines } from "./text.js";
 import { cornerRadius, roundPolygon, fillLines, arrowheadCmds, fontClass } from "./style.js";
@@ -112,7 +112,12 @@ export function paintElement(doc, el, P, view, theme, out, opts = {}) {
   if (el.type === "text") {
     if (isLabel(el)) {
       const box = doc.get(el.containerId); if (!box) return;
-      const b = bbox(box), [x0, y0] = Q(b.x, b.y), [x1, y1] = Q(b.x + b.w, b.y + b.h);
+      let b = bbox(box);
+      if (isLinear(box)) {   // a line's label sits halfway along its path (elbows included)
+        const m = alongPath(resolvedPoints(doc, box)), lw = Math.max(40, String(el.text).length * el.fontSize * 0.6), lh = el.fontSize * 1.4;
+        b = { x: m[0] - lw / 2, y: m[1] - lh / 2, w: lw, h: lh };
+      }
+      const [x0, y0] = Q(b.x, b.y), [x1, y1] = Q(b.x + b.w, b.y + b.h);
       const color = box.backgroundColor !== "transparent" && (!box.fillStyle || box.fillStyle === "solid") && INK.has(el.strokeColor) ? "#1e1e1e" : ink(el.strokeColor, theme);
       const text = isShape(box) ? labelLines(el, box).join("\n") : el.text;   // labels wrap to their shape
       if (isLinear(box)) {   // on a line: a patch of background behind the text, like Excalidraw's gap
