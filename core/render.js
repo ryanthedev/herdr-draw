@@ -9,6 +9,7 @@ import { DEFAULT_STROKE, isShape, isLinear, isLabel } from "./model.js";
 import { bbox, resolvedPoints, toWorld, angleOf, centerOf } from "./geometry.js";
 import { animState } from "./anim.js";
 import { labelLines } from "./text.js";
+import { cornerRadius, roundPolygon, fillLines, arrowheadCmds, fontClass } from "./style.js";
 
 export function rng(seed) {
   let s = (seed >>> 0) || 1;
@@ -34,8 +35,14 @@ export function outlinePoints(el) {
 }
 function localOutline(el) {
   const b = bbox(el);
-  if (el.type === "rectangle" || el.type === "frame") return [[b.x, b.y], [b.x + b.w, b.y], [b.x + b.w, b.y + b.h], [b.x, b.y + b.h], [b.x, b.y]];
-  if (el.type === "diamond") return [[b.x + b.w / 2, b.y], [b.x + b.w, b.y + b.h / 2], [b.x + b.w / 2, b.y + b.h], [b.x, b.y + b.h / 2], [b.x + b.w / 2, b.y]];
+  if (el.type === "rectangle" || el.type === "frame") {
+    const cs = [[b.x, b.y], [b.x + b.w, b.y], [b.x + b.w, b.y + b.h], [b.x, b.y + b.h]];
+    return roundPolygon(cs, el.type === "rectangle" ? cornerRadius(el, Math.min(b.w, b.h)) : 0);
+  }
+  if (el.type === "diamond") {
+    const cs = [[b.x + b.w / 2, b.y], [b.x + b.w, b.y + b.h / 2], [b.x + b.w / 2, b.y + b.h], [b.x, b.y + b.h / 2]];
+    return roundPolygon(cs, cornerRadius(el, Math.min(b.w, b.h)) * 0.6);
+  }
   const n = 40, cx = b.x + b.w / 2, cy = b.y + b.h / 2, out = [];
   for (let i = 0; i <= n; i++) { const a = (i / n) * Math.PI * 2; out.push([cx + Math.cos(a) * b.w / 2, cy + Math.sin(a) * b.h / 2]); }
   return out;
@@ -82,10 +89,6 @@ function smooth(cmds, pts) {
   cmds.push(["L", ...pts[pts.length - 1]]);
 }
 
-function arrowhead(cmds, from, to, size) {
-  const a = Math.atan2(to[1] - from[1], to[0] - from[0]), len = Math.min(size, Math.hypot(to[0] - from[0], to[1] - from[1]) * 0.5);
-  for (const d of [-0.45, 0.45]) cmds.push(["M", to[0], to[1]], ["L", to[0] - Math.cos(a + d) * len, to[1] - Math.sin(a + d) * len]);
-}
 
 export const project = view => (x, y) => [(x + view.x) * view.scale, (y + view.y) * view.scale];
 
@@ -110,7 +113,7 @@ export function paintElement(doc, el, P, view, theme, out, opts = {}) {
     if (isLabel(el)) {
       const box = doc.get(el.containerId); if (!box) return;
       const b = bbox(box), [x0, y0] = Q(b.x, b.y), [x1, y1] = Q(b.x + b.w, b.y + b.h);
-      const color = box.backgroundColor !== "transparent" && INK.has(el.strokeColor) ? "#1e1e1e" : ink(el.strokeColor, theme);
+      const color = box.backgroundColor !== "transparent" && (!box.fillStyle || box.fillStyle === "solid") && INK.has(el.strokeColor) ? "#1e1e1e" : ink(el.strokeColor, theme);
       const text = isShape(box) ? labelLines(el, box).join("\n") : el.text;   // labels wrap to their shape
       if (isLinear(box)) {   // on a line: a patch of background behind the text, like Excalidraw's gap
         const lines = String(text).split("\n"), s2 = el.fontSize * s, w = Math.max(...lines.map(l => l.length)) * s2 * 0.56 + 10, h = lines.length * s2 * (el.lineHeight ?? 1.25) + 4;
@@ -118,10 +121,10 @@ export function paintElement(doc, el, P, view, theme, out, opts = {}) {
         out.push({ t: "path", id: el.id + ":bg", cmds: [["M", mx - w / 2, my - h / 2], ["L", mx + w / 2, my - h / 2], ["L", mx + w / 2, my + h / 2], ["L", mx - w / 2, my + h / 2]], fill: theme.bg, opacity });
       }
       const [cx, cy] = Q(b.x + b.w / 2, b.y + b.h / 2);
-      out.push({ t: "text", id: el.id, angle: angleOf(box), cx, cy, x: x0, y: y0, text, size: el.fontSize * s * (a?.scale ?? 1), color, align: "center", box: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, lineHeight: el.lineHeight ?? 1.25, opacity, reveal: progress });
+      out.push({ t: "text", id: el.id, font: fontClass(el.fontFamily), angle: angleOf(box), cx, cy, x: x0, y: y0, text, size: el.fontSize * s * (a?.scale ?? 1), color, align: "center", box: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, lineHeight: el.lineHeight ?? 1.25, opacity, reveal: progress });
     } else {
       const [x, y] = Q(el.x, el.y), c = centerOf(el), [cx, cy] = Q(c.x, c.y);
-      out.push({ t: "text", id: el.id, angle: angleOf(el), cx, cy, x, y, text: el.text, size: el.fontSize * s * (a?.scale ?? 1), color: ink(el.strokeColor, theme), align: "left", lineHeight: el.lineHeight ?? 1.25, opacity, reveal: progress });
+      out.push({ t: "text", id: el.id, font: fontClass(el.fontFamily), angle: angleOf(el), cx, cy, x, y, text: el.text, size: el.fontSize * s * (a?.scale ?? 1), color: ink(el.strokeColor, theme), align: "left", lineHeight: el.lineHeight ?? 1.25, opacity, reveal: progress });
     }
     return;
   }
@@ -133,7 +136,15 @@ export function paintElement(doc, el, P, view, theme, out, opts = {}) {
       out.push({ t: "text", id: el.id + ":name", x: pts[0][0], y: pts[0][1] - 18 * Math.min(1, s), text: el.name || "Frame", size: 12 * Math.min(1, s) + 2, color: theme.dim, align: "left", lineHeight: 1.2, opacity });
       return;
     }
-    if (fill && progress >= 1) out.push({ t: "path", id: el.id, cmds: pts.slice(0, -1).map((p, i) => [i ? "L" : "M", ...p]), fill: withAlpha(fill, el.fillStyle === "solid" ? 1 : 0.5), opacity });
+    if (fill && progress >= 1) {
+      const poly = pts.slice(0, -1);
+      if (!el.fillStyle || el.fillStyle === "solid") out.push({ t: "path", id: el.id, cmds: poly.map((p, i) => [i ? "L" : "M", ...p]), fill, opacity });
+      else {   // hachure / cross-hatch / zigzag: lines in the fill color, slightly hand-drawn
+        const cmds = [], jj = () => (r() - 0.5) * rough;
+        for (const [a, b] of fillLines(el.fillStyle, poly, width)) cmds.push(["M", a[0] + jj(), a[1] + jj()], ["L", b[0] + jj(), b[1] + jj()]);
+        if (cmds.length) out.push({ t: "path", id: el.id, cmds, stroke: fill, width: Math.max(0.5, width / 2), dash: null, opacity });
+      }
+    }
     if (stroke) { const cmds = []; sketch(cmds, trim(pts, progress), r, rough, progress >= 1); out.push({ t: "path", id: el.id, cmds, stroke, width, dash, opacity }); }
     return;
   }
@@ -148,13 +159,17 @@ export function paintElement(doc, el, P, view, theme, out, opts = {}) {
       out.push({ t: "path", id: el.id, cmds, stroke, width: Math.max(1, width * 1.1), dash: null, opacity });
       return;
     }
-    sketch(cmds, pts, r, rough, false);
+    if (el.roundness && pts.length > 2) smooth(cmds, pts);   // Excalidraw's curved lines
+    else sketch(cmds, pts, r, rough, false);
     out.push({ t: "path", id: el.id, cmds, stroke, width, dash, opacity });
     if (pts.length >= 2 && progress >= 1) {
-      const heads = [];
-      if (el.endArrowhead) arrowhead(heads, pts[pts.length - 2], pts[pts.length - 1], 18 * s);
-      if (el.startArrowhead) arrowhead(heads, pts[1], pts[0], 18 * s);
-      if (heads.length) out.push({ t: "path", id: el.id, cmds: heads, stroke, width, dash: null, opacity });
+      const strokes = [], fills = [];
+      for (const [type, from, to] of [[el.endArrowhead, pts[pts.length - 2], pts[pts.length - 1]], [el.startArrowhead, pts[1], pts[0]]]) {
+        if (!type) continue;
+        const h = arrowheadCmds(type, from, to, 18 * s); strokes.push(...h.strokes); fills.push(...h.fills);
+      }
+      if (fills.length) out.push({ t: "path", id: el.id, cmds: fills, fill: stroke, opacity });
+      if (strokes.length) out.push({ t: "path", id: el.id, cmds: strokes, stroke, width, dash: null, opacity });
     }
   }
 }

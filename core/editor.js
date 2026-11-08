@@ -51,7 +51,7 @@ export class Editor {
     this.tool = "select"; this.toolLock = false;
     this.sel = new Set();
     this.view = { x: 40, y: 40, scale: 1 }; this.size = { w: 800, h: 600 };
-    this.style = { strokeColor: DEFAULT_STROKE, backgroundColor: "transparent", strokeWidth: 2, strokeStyle: "solid", roughness: 1, opacity: 100, fontSize: 20 };
+    this.style = { strokeColor: DEFAULT_STROKE, backgroundColor: "transparent", fillStyle: "solid", strokeWidth: 2, strokeStyle: "solid", roughness: 1, opacity: 100, fontSize: 20, fontFamily: 2, roundness: null };
     this.activeLayer = this.doc.layers[this.doc.layers.length - 1].id;
     this.undoStack = []; this.redoStack = [];
     this.g = null;               // the gesture in progress
@@ -263,7 +263,7 @@ export class Editor {
   downCreate(p, w, m) {
     const at = this.snapPoint(w);
     const s = this.style;
-    const fields = { x: at.x, y: at.y, strokeColor: s.strokeColor, backgroundColor: isShape({ type: this.tool }) ? s.backgroundColor : "transparent", strokeWidth: s.strokeWidth, strokeStyle: s.strokeStyle, roughness: s.roughness, opacity: s.opacity };
+    const fields = { x: at.x, y: at.y, strokeColor: s.strokeColor, backgroundColor: isShape({ type: this.tool }) ? s.backgroundColor : "transparent", fillStyle: s.fillStyle, strokeWidth: s.strokeWidth, strokeStyle: s.strokeStyle, roughness: s.roughness, opacity: s.opacity, roundness: this.tool === "rectangle" || this.tool === "diamond" || this.tool === "line" || this.tool === "arrow" ? s.roundness : null };
     if (this.tool === "arrow" || this.tool === "line") {
       fields.points = [[0, 0], [0, 0]];
       const target = shapeAt(this.doc, w);
@@ -607,12 +607,12 @@ export class Editor {
       if (!el) {
         isNew = true;
         const c = center(bbox(target));
-        el = this.newEl("text", { x: c.x, y: c.y, containerId: target.id, textAlign: "center", verticalAlign: "middle", strokeColor: target.strokeColor, fontSize: this.style.fontSize });
+        el = this.newEl("text", { x: c.x, y: c.y, containerId: target.id, textAlign: "center", verticalAlign: "middle", strokeColor: target.strokeColor, fontSize: this.style.fontSize, fontFamily: this.style.fontFamily });
       }
     } else if (target?.type === "frame") {
       this.text = { id: target.id, value: target.name ?? "", isNew: false, frame: true }; this.select([target.id]); return this.changed();
     } else if (target?.type === "text") el = target;
-    else { isNew = true; el = this.newEl("text", { x: w.x, y: w.y - this.style.fontSize * 0.6, strokeColor: this.style.strokeColor, fontSize: this.style.fontSize, opacity: this.style.opacity }); }
+    else { isNew = true; el = this.newEl("text", { x: w.x, y: w.y - this.style.fontSize * 0.6, strokeColor: this.style.strokeColor, fontSize: this.style.fontSize, fontFamily: this.style.fontFamily, opacity: this.style.opacity }); }
     this.text = { id: el.id, value: el.text ?? "", isNew, draft: isNew ? el : null };
     if (!this.toolLock) this.tool = "select";
     this.changed();
@@ -819,7 +819,13 @@ export class Editor {
             if (l) { const cl = tx.get(l.id); cl.fontSize = v; this.fitHost(c, cl); }
             continue;
           }
-          if (k === "backgroundColor" && !isShape(c)) continue;
+          if (k === "fontFamily") {
+            if (c.type === "text") c.fontFamily = v;
+            const l = isShape(e) && this.doc.labelOf(e); if (l) tx.get(l.id).fontFamily = v;
+            continue;
+          }
+          if ((k === "backgroundColor" || k === "fillStyle") && !isShape(c)) continue;
+          if (k === "roundness" && !["rectangle", "diamond", "arrow", "line"].includes(c.type)) continue;
           if (k === "endArrowhead" || k === "startArrowhead") { if (c.type === "arrow" || c.type === "line") c[k] = v; continue; }
           c[k] = v;
           if (k === "strokeColor") { const l = isShape(e) && this.doc.labelOf(e); if (l) tx.get(l.id).strokeColor = v; }

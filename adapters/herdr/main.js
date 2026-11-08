@@ -6,10 +6,11 @@
 
 import { View, div, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
-import { props, exec, theme, settings, home, nextCommand, panes, readTextFile, writeTextFile } from "herdr";
+import { props, exec, theme, settings, home, nextCommand, panes, readTextFile, writeTextFile, fonts } from "herdr";
 import { Editor, TOOLS, STROKES, FILLS, WIDTHS, STYLES } from "./core/editor.js";
 import { withAlpha, paintScene } from "./core/render.js";
 import { PRESET_NAMES } from "./core/anim.js";
+import { FONT_FAMILY } from "./core/style.js";
 import { isShape, isLabel, layerOf } from "./core/model.js";
 import { toSvg } from "./svg.js";
 import { FileStore } from "./store.js";
@@ -172,6 +173,17 @@ export default class Draw extends View {
       .catch(e => { this.error = `Export failed: ${e?.message ?? e}`; });
   }
 
+  // Excalidraw font classes → installed fonts: hand-drawn if one exists, the terminal font for mono.
+  face(cls) {
+    if (cls === "mono") return settings().font_family || "Menlo";
+    if (cls !== "hand") return null;
+    if (this.handFace === undefined) {
+      let have = []; try { have = (fonts?.() ?? []).map(f => (typeof f === "string" ? f : f?.name ?? f?.family)).filter(Boolean); } catch { have = []; }
+      this.handFace = ["Excalifont", "Virgil", "Chalkboard SE", "Comic Sans MS"].find(f => have.includes(f)) ?? null;
+    }
+    return this.handFace;
+  }
+
   palette() { const t = theme(); return { fg: t.foreground, bg: t.background, accent: t.accent, dim: t.dim ?? t.muted }; }
 
   // ── paint ──────────────────────────────────────────────────────────────
@@ -227,7 +239,10 @@ export default class Draw extends View {
         if (it.dash) b = b.dash_array(it.dash);
         cur = { key, color, b, n: 0 }; layers.push(cur);
       }
+      let started = false;
       for (const c of it.cmds) {
+        if (c[0] === "M" && it.fill && started) cur.b.close();   // each filled shape closes before the next starts
+        started = true;
         if (c[0] === "M") cur.b.move_to(c[1], c[2]);
         else if (c[0] === "L") cur.b.line_to(c[1], c[2]);
         else if (c[0] === "Q") cur.b.curve_to(c[1], c[2], c[3], c[4]);
@@ -248,7 +263,8 @@ export default class Draw extends View {
   textItem(it, t) {
     let text = String(it.text ?? "");
     if (it.reveal != null && it.reveal < 1) text = text.slice(0, Math.round(text.length * it.reveal));   // typewriter
-    const lines = v_flex().text_size(it.size).line_height(it.lineHeight ?? 1.25).text_color(withAlpha(it.color ?? t.foreground, it.opacity ?? 1))
+    const face = this.face(it.font);
+    const lines = v_flex().when(!!face, e => e.font_family(face)).text_size(it.size).line_height(it.lineHeight ?? 1.25).text_color(withAlpha(it.color ?? t.foreground, it.opacity ?? 1))
       .children(text.split("\n").map(l => div().whitespace_nowrap().child(l || " ")));
     if (it.box) return div().absolute().left(it.box.x).top(it.box.y).w(it.box.w).h(it.box.h).flex().items_center().justify_center().text_center().child(lines.items_center());
     return div().absolute().left(it.x).top(it.y).child(lines);
@@ -310,10 +326,13 @@ export default class Draw extends View {
       .child(row("Style", STYLES.map(v => this.chip(t, `ss-${v}`, { solid: "—", dashed: "- -", dotted: "···" }[v], s("strokeStyle") === v, `${v} (s)`, () => ed.setStyle({ strokeStyle: v })))))
       .child(row("Sketch", [0, 1, 2].map(r => this.chip(t, `ro-${r}`, ["clean", "sketch", "loose"][r], s("roughness") === r, "Roughness (g toggles)", () => ed.setStyle({ roughness: r }), 44))))
       .child(row("Opacity", [100, 75, 50, 25].map(o => this.chip(t, `op-${o}`, `${o}`, s("opacity") === o, `Opacity ${o}%`, () => ed.setStyle({ opacity: o })))))
+      .child(row("Fill", ["solid", "hachure", "cross-hatch"].map(f => this.chip(t, `fs2-${f}`, { solid: "solid", hachure: "////", "cross-hatch": "xxxx" }[f], (s("fillStyle") ?? "solid") === f, `Fill style: ${f}`, () => ed.setStyle({ fillStyle: f }), 40))))
+      .child(row("Edges", [["sharp", null], ["round", { type: 3 }]].map(([lab, v]) => this.chip(t, `rd-${lab}`, lab, !!s("roundness") === !!v, `${lab} corners / curves`, () => ed.setStyle({ roundness: v }), 44))))
+      .child(row("Font", Object.keys(FONT_FAMILY).map(f => this.chip(t, `ff-${f}`, f, (ed.selected()[0] && (ed.selected()[0].type === "text" ? ed.selected()[0].fontFamily : ed.doc.labelOf(ed.selected()[0])?.fontFamily) || ed.style.fontFamily) === FONT_FAMILY[f], `Font: ${f}`, () => ed.setStyle({ fontFamily: FONT_FAMILY[f] }), 40))))
       .child(row("Text", [16, 20, 28, 36].map(f => this.chip(t, `fs-${f}`, `${f}`, (ed.selectedFont() ?? ed.style.fontSize) === f, `Font size ${f} (= and -)`, () => ed.setStyle({ fontSize: f })))));
     if (ed.selected().some(e => e.type === "arrow" || e.type === "line")) {
-      body.child(row("Heads", [["none", null, null], ["→", null, "arrow"], ["↔", "arrow", "arrow"]].map(([lab, a, b], i) =>
-        this.chip(t, `ah-${i}`, lab, (s("startArrowhead") ?? null) === a && (s("endArrowhead") ?? null) === b, "Arrowheads", () => ed.setStyle({ startArrowhead: a, endArrowhead: b }), 34))));
+      body.child(row("Heads", [["none", null, null], ["→", null, "arrow"], ["↔", "arrow", "arrow"], ["▶", null, "triangle"], ["▷", null, "triangle_outline"], ["●", null, "dot"], ["◆", null, "diamond"], ["⊣", null, "bar"]].map(([lab, a, b], i) =>
+        this.chip(t, `ah-${i}`, lab, (s("startArrowhead") ?? null) === a && (s("endArrowhead") ?? null) === b, `Arrowheads: ${b ?? "none"}`, () => ed.setStyle({ startArrowhead: a, endArrowhead: b }), 26))));
     }
     return this.section(t, ed.sel.size ? `Properties · ${ed.sel.size} selected` : "Properties · next shape", body);
   }

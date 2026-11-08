@@ -218,7 +218,7 @@ export function mermaidToElements(src, { origin = { x: 0, y: 0 }, layer = "base"
   for (const [id, n] of g.nodes) {
     const p = place.get(id);
     const el = makeElement(n.type, { x: origin.x + p.x, y: origin.y + p.y, width: p.w, height: p.h, roundness: n.rounded ? { type: 3 } : null, customData: cd() });
-    const label = makeElement("text", { x: el.x, y: el.y, text: n.label, originalText: n.label, containerId: el.id, textAlign: "center", verticalAlign: "middle", customData: { layer, z: zz } });
+    const label = makeElement("text", { x: el.x, y: el.y, text: n.label, originalText: n.label, fontFamily: 2, containerId: el.id, textAlign: "center", verticalAlign: "middle", customData: { layer, z: zz } });
     el.boundElements = [{ id: label.id, type: "text" }];
     const need = labelHostHeight(label, el); if (el.height < need) el.height = need;
     idOf.set(id, el); els.push(el, label);
@@ -237,7 +237,7 @@ export function mermaidToElements(src, { origin = { x: 0, y: 0 }, layer = "base"
     for (const host of [s, t]) host.boundElements = [...(host.boundElements ?? []), { id: a.id, type: "arrow" }];
     els.push(a);
     if (e.label) {
-      const lt = makeElement("text", { x: a.x, y: a.y, text: e.label, originalText: e.label, fontSize: 16, containerId: a.id, textAlign: "center", verticalAlign: "middle", customData: { layer, z: zz } });
+      const lt = makeElement("text", { x: a.x, y: a.y, text: e.label, originalText: e.label, fontSize: 16, fontFamily: 2, containerId: a.id, textAlign: "center", verticalAlign: "middle", customData: { layer, z: zz } });
       a.boundElements = [{ id: lt.id, type: "text" }];
       els.push(lt);
     }

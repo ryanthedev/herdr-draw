@@ -20,8 +20,14 @@ function color(c, opacity = 1) {
   return [c, opacity];
 }
 
-export function toSvg(items, { width, height, background, font = "Helvetica, Arial, sans-serif" } = {}) {
-  width = num(width, 800); height = num(height, 600); font = esc(font);
+const FACES = {
+  hand: "Excalifont, Virgil, 'Chalkboard SE', 'Comic Sans MS', cursive",
+  mono: "'Cascadia Code', Menlo, Consolas, monospace",
+  sans: "Helvetica, Arial, sans-serif",
+};
+
+export function toSvg(items, { width, height, background, font = FACES.sans } = {}) {
+  width = num(width, 800); height = num(height, 600); const base = esc(font);
   const out = [`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`];
   if (background) out.push(`<rect width="100%" height="100%" fill="${color(background)[0]}"/>`);
   for (let it of items) {
@@ -33,6 +39,7 @@ export function toSvg(items, { width, height, background, font = "Helvetica, Ari
       // Rotated text turns about its center (adapters without text rotation draw it upright).
       const deg = num(it.angle) * 180 / Math.PI;
       if (deg) out.push(`<g transform="rotate(${deg.toFixed(2)} ${num(it.cx).toFixed(1)} ${num(it.cy).toFixed(1)})">`);
+      const font = it.font && FACES[it.font] ? esc(FACES[it.font]) : base;
       const size = num(it.size, 16), lines = String(it.text).split("\n"), lh = size * num(it.lineHeight, 1.25), [c, o] = color(it.color, op);
       it = { ...it, size, x: num(it.x), y: num(it.y), box: it.box && { x: num(it.box.x), y: num(it.box.y), w: num(it.box.w), h: num(it.box.h) } };
       if (it.box) {

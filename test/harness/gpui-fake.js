@@ -78,6 +78,7 @@ export function installFakes({ file, home }) {
   }));
   mock.module("herdr", () => ({
     props: () => ({ file }),
+    fonts: () => ["Chalkboard SE", "Menlo"],
     theme: () => THEME,
     settings: () => ({ zoom: 1 }),
     home: () => home,
