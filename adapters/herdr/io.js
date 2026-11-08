@@ -29,11 +29,20 @@ export async function readText(path) {
   }
 }
 
+// UTF-8 size, rounded up (a surrogate pair counts 6, not 4): only ever over the truth.
+function bytes(s) {
+  if (s.length > SMALL) return s.length;
+  let n = s.length;
+  for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); if (c > 0x7f) n += c > 0x7ff ? 2 : 1; }
+  return n;
+}
+const small = s => s == null || bytes(s) <= SMALL;
+
 // Writes only if the file still holds `expected` (null: it must not exist). Rejects when
 // stale, like writeTextFile. The big path checks then renames: a writer landing between
 // the two is lost to that check, a narrower window than none.
 export async function writeText(path, text, expected) {
-  if (text.length <= SMALL / 3 && (expected == null || expected.length <= SMALL / 3)) return writeTextFile(path, text, expected);
+  if (small(text) && small(expected)) return writeTextFile(path, text, expected);   // atomic check-and-write
   const cur = await readText(path).catch(() => undefined);
   if (cur === undefined || cur !== expected) throw new Error("stale: the file changed since it was read");
   const dir = tmpDir(), stamp = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`, parts = [];

@@ -14,7 +14,7 @@ import { FONT_FAMILY } from "./core/style.js";
 import { isShape, isLabel, layerOf } from "./core/model.js";
 import { toSvg } from "./svg.js";
 import { FileStore } from "./store.js";
-import { writeText } from "./io.js";
+import { readText, writeText } from "./io.js";
 
 const MOD = "herdr-draw";
 const Z = () => Number(settings().zoom) || 1;
@@ -29,8 +29,6 @@ const IMG_REL = ".cache/herdr-draw/img";
 const IMG_DIR = () => `${appHome()}/${IMG_REL}`;
 const MIME_EXT = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp", "image/svg+xml": "svg" };
 const IMAGE_FILE = /\.(png|jpe?g|gif|webp|svg|heic|heif|tiff?|bmp)$/i;
-// Cache names come from file ids, and a board's ids are untrusted: keep them to safe characters.
-const cacheName = (id, mime) => `${String(id).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80)}.${MIME_EXT[mime] ?? "png"}`;
 
 // One file → { id, mimeType, width, height, dataURL }. Formats GPUI or Excalidraw may not
 // take (HEIC, TIFF…) become PNG, and anything over 2 MB becomes a JPEG at most 2000 px, so the
@@ -200,7 +198,7 @@ export default class Draw extends View {
       const [id, mimeType, dims, b64] = (r.stdout ?? "").split("\n");
       if (r.code !== 0 || !/^[0-9a-f]{40}$/.test(id ?? "") || !b64) { this.flash = `Can't import ${p.split("/").pop()}`; continue; }
       const [width, height] = (dims ?? "").trim().split(/\s+/).map(Number);
-      this.imgs.set(id, `${IMG_REL}/${cacheName(id, mimeType)}`);
+      this.imgs.set(id, `${IMG_REL}/${id}.${MIME_EXT[mimeType] ?? "svg"}`);   // id: our own hash of the bytes, checked above
       ids.push(ed.addImage({ id, mimeType, dataURL: `data:${mimeType};base64,${b64}`, width: width || 400, height: height || 300 }, { x: c.x + i * 30, y: c.y + i * 30 }));
     }
     if (ids.length > 1) ed.select(ids);
@@ -217,15 +215,15 @@ export default class Draw extends View {
       for (const id of todo) {
         const f = files[id], m = /^data:(image\/[a-z+]+);base64,([A-Za-z0-9+/=]+)$/.exec(f?.dataURL ?? "");
         if (!m || !MIME_EXT[m[1]]) { this.imgs.set(id, "failed"); continue; }
-        const name = cacheName(id, m[1]), out = `${IMG_DIR()}/${name}`;
+        // Cache files are named by the SHA-1 of their decoded bytes, never by the board's id: a
+        // board can claim any id, and must not get another board's picture shown under it.
         try {
-          if ((await exec("test", ["-s", out])).code !== 0) {
-            const tmp = `${out}.${Date.now()}.b64`;
-            await writeText(tmp, m[2], null);
-            const r = await exec("sh", ["-c", 'base64 -D < "$1" > "$2.part" && mv "$2.part" "$2"; s=$?; rm -f "$1"; exit $s', "img-cache", tmp, out]);
-            if (r.code !== 0) throw new Error(r.stderr || "base64 failed");
-          }
-          this.imgs.set(id, `${IMG_REL}/${name}`);
+          const tmp = `${IMG_DIR()}/in-${Date.now()}-${Math.floor(Math.random() * 1e6)}.b64`;
+          await writeText(tmp, m[2], null);
+          const r = await exec("sh", ["-c", 'set -e; trap \'rm -f "$1" "$1.bin"\' EXIT; base64 -D < "$1" > "$1.bin"; h=$(shasum -a 1 < "$1.bin" | cut -c1-40); [ -s "$2/$h.$3" ] || mv "$1.bin" "$2/$h.$3"; printf %s "$h"', "img-cache", tmp, IMG_DIR(), MIME_EXT[m[1]]]);
+          const h = (r.stdout ?? "").trim();
+          if (r.code !== 0 || !/^[0-9a-f]{40}$/.test(h)) throw new Error(r.stderr || "base64 failed");
+          this.imgs.set(id, `${IMG_REL}/${h}.${MIME_EXT[m[1]]}`);
         } catch { this.imgs.set(id, "failed"); }
         cx.notify();
       }
@@ -261,7 +259,7 @@ export default class Draw extends View {
     ed.view = saved.view; ed.size = saved.size; ed.changed();
     const out = this.file.replace(/\.excalidraw(\.json)?$/, "") + ".svg";
     // Not through a shell argument: a big board's SVG passes macOS's ~1 MB argv limit.
-    readTextFile(out).then(old => writeTextFile(out, svg, old)).then(() => { this.flash = `exported ${out.split("/").pop()}`; })
+    readText(out).then(old => writeText(out, svg, old)).then(() => { this.flash = `exported ${out.split("/").pop()}`; })
       .catch(e => { this.error = `Export failed: ${e?.message ?? e}`; });
   }
 

@@ -232,9 +232,10 @@ test("an image written by someone else (drawh, a peer) is decoded into the cache
   const ui = await open();
   ui.tree(); await ui.cx.flush();          // render asks for the decode; the spawn runs it
   const node = find(ui.canvas(), n => n.kind === "image");
-  expect(node.path).toBe(".cache/herdr-draw/img/agent____pic.png");   // an untrusted id can't climb out of the cache
+  // Named by the bytes' hash, not the board's id: an id can neither climb out of the cache nor alias another picture.
+  expect(node.path).toBe(`.cache/herdr-draw/img/${new Bun.CryptoHasher("sha1").update(readFileSync(TINY)).digest("hex")}.png`);
   expect(readFileSync(`${home}/${node.path}`).equals(readFileSync(TINY))).toBe(true);
-  expect(readdirSync(IMG_DIR).filter(f => f.endsWith(".b64"))).toEqual([]);   // the temp base64 is gone
+  expect(readdirSync(IMG_DIR).filter(f => /\.b64|\.bin/.test(f))).toEqual([]);   // temp files are gone
   await ui.shot("herdr-image");
 });
 
@@ -268,4 +269,36 @@ test("a board over 1 MiB (a few photos) opens, saves, and still takes an agent's
   const after = ui.disk();
   expect(after.elements.find(e => e.id === "t1").x).toBe(900);
   expect(after.elements.some(e => e.type === "ellipse")).toBe(true);
+});
+
+test("a board can't make another board's cached picture show by claiming its id", async () => {
+  realImages();
+  const sha = new Bun.CryptoHasher("sha1").update(readFileSync(TINY)).digest("hex");   // already cached by the tests above
+  const other = Buffer.from(readFileSync(TINY)); other[other.length - 20] ^= 1;       // different bytes
+  const scene = { type: "excalidraw", version: 2, elements: [
+    { id: "spoof", type: "image", fileId: sha, x: 0, y: 0, width: 80, height: 40, angle: 0, opacity: 100, version: 2, versionNonce: 1, isDeleted: false, strokeColor: "transparent", backgroundColor: "transparent", customData: { layer: "base", z: 1 } },
+  ], appState: {}, files: { [sha]: { id: sha, mimeType: "image/png", dataURL: `data:image/png;base64,${other.toString("base64")}` } } };
+  writeFileSync(file, JSON.stringify(scene));
+  const ui = await open();
+  ui.tree(); await ui.cx.flush();
+  const node = find(ui.canvas(), n => n.kind === "image");
+  expect(node.path).not.toContain(sha);
+  expect(readFileSync(`${home}/${node.path}`).equals(other)).toBe(true);
+});
+
+test("SVG export (⌘⇧E) of a photo board passes 1 MiB and still writes, picture included", async () => {
+  realImages();
+  const big = Buffer.alloc(1_200_000, 9).toString("base64");
+  const scene = { type: "excalidraw", version: 2, elements: [
+    { id: "p", type: "image", fileId: "bp", x: 0, y: 0, width: 300, height: 200, angle: 0, opacity: 100, version: 2, versionNonce: 1, isDeleted: false, strokeColor: "transparent", backgroundColor: "transparent", customData: { layer: "base", z: 1 } },
+  ], appState: {}, files: { bp: { id: "bp", mimeType: "image/png", dataURL: `data:image/png;base64,${big}` } } };
+  writeFileSync(file, JSON.stringify(scene));
+  const svgPath = file.replace(/\.excalidraw$/, ".svg");
+  writeFileSync(svgPath, "x".repeat(1_500_000));   // an earlier big export is already there
+  const ui = await open();
+  ui.key("e", { platform: true, shift: true });
+  await ui.cx.flush(); await new Promise(r => setTimeout(r, 50));
+  const out = readFileSync(svgPath, "utf8");
+  expect(ui.view.error).toBeNull();
+  expect(out).toContain(`<image href="data:image/png;base64,${big.slice(0, 40)}`);
 });
