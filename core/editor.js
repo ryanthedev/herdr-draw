@@ -10,7 +10,7 @@ import {
 } from "./model.js";
 import { Doc } from "./doc.js";
 import {
-  bbox, unionBox, inBox, boxInBox, center, normalize, hits, hitTest, shapeAt, resolvedPoints, settle, mapIntoBox, distToSeg, segmentsIntersect,
+  bbox, unionBox, inBox, boxInBox, center, normalize, hits, hitTest, shapeAt, bindTargetAt, resolvedPoints, settle, mapIntoBox, distToSeg, segmentsIntersect,
   bounds, corners, rotate, rotateAbout, angleOf, centerOf, toLocal, toWorld as elToWorld, normAngle,
 } from "./geometry.js";
 import { paintScene, paintElement, project, rectCmds, withAlpha } from "./render.js";
@@ -272,7 +272,7 @@ export class Editor {
     if (this.tool === "arrow" || this.tool === "line") {
       fields.points = [[0, 0], [0, 0]];
       if (this.tool === "arrow" && s.elbowed) { fields.elbowed = true; fields.roundness = null; }
-      const target = shapeAt(this.doc, w);
+      const target = bindTargetAt(this.doc, w);
       if (target) fields.startBinding = { elementId: target.id, focus: 0, gap: 6 };
     }
     if (this.tool === "frame") Object.assign(fields, { backgroundColor: "transparent", strokeWidth: 1, name: `Frame ${this.doc.live().filter(e => e.type === "frame").length + 1}`, customData: { z: this.doc.minZ(this.activeLayer) - 1 } });
@@ -495,7 +495,7 @@ export class Editor {
     if (!el || (i !== 0 && i !== el.points.length - 1)) return;
     const p = { x: el.x + el.points[i][0], y: el.y + el.points[i][1] };
     const other = i === 0 ? el.endBinding?.elementId : el.startBinding?.elementId;
-    const s = shapeAt(this.doc, p, other);
+    const s = bindTargetAt(this.doc, p, other);
     const b = s ? { elementId: s.id, focus: 0, gap: 6 } : null;
     if (i === 0) el.startBinding = b; else el.endBinding = b;
   }
@@ -538,7 +538,7 @@ export class Editor {
 
   bindEnd(el) {
     const end = el.points[el.points.length - 1];
-    const s = shapeAt(this.doc, { x: el.x + end[0], y: el.y + end[1] }, el.startBinding?.elementId);
+    const s = bindTargetAt(this.doc, { x: el.x + end[0], y: el.y + end[1] }, el.startBinding?.elementId);
     if (s) el.endBinding = { elementId: s.id, focus: 0, gap: 6 };
   }
 

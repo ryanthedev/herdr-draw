@@ -133,3 +133,31 @@ test("rotation keeps the image's angle (SVG export turns it)", () => {
   const svg = toSvg([it], { files: t.ed.doc.files });
   expect(svg).toContain("rotate(90.00");
 });
+
+test("arrows bind to images (annotate a screenshot) and follow them; elbows route around pictures", async () => {
+  const { resolvedPoints, bounds } = await import("../core/geometry.js");
+  const t = setup();
+  const img = t.ed.addImage({ ...FILE, width: 160, height: 80 }, { x: 150, y: 150 });   // 70,110 → 230,190
+  t.key("r"); t.drag([400, 120], [500, 180]);
+  t.key("a"); t.drag([150, 150], [450, 150]);
+  const a = t.byType("arrow")[0];
+  expect(a.startBinding?.elementId).toBe(img);
+  expect(t.ed.doc.get(img).boundElements).toEqual([{ id: a.id, type: "arrow" }]);
+  expect(resolvedPoints(t.ed.doc, a)[0][0]).toBeCloseTo(236, 0);               // leaves the picture's right edge (+gap)
+  t.ed.select([img]); t.drag([150, 150], [150, 350]);                           // move the picture down
+  const moved = t.ed.doc.get(a.id);
+  expect(resolvedPoints(t.ed.doc, moved)[0][1]).toBeGreaterThan(300);
+  // Double-clicking a picture doesn't give it a label (only shapes take one).
+  t.ed.sel.clear(); t.dblclick([150, 350]);
+  expect(t.ed.text?.id ?? null).not.toBe(img);
+  if (t.ed.text) t.ed.commitText();
+  // An elbow between two shapes goes around a picture in the way.
+  const u = setup();
+  u.key("r"); u.drag([0, 100], [80, 160]);
+  u.key("r"); u.drag([500, 100], [580, 160]);
+  const pic = u.ed.addImage({ ...FILE, width: 200, height: 200 }, { x: 290, y: 130 });
+  u.ed.style.elbowed = true; u.key("a"); u.drag([40, 130], [540, 130]);
+  const el = u.byType("arrow")[0], pts = resolvedPoints(u.ed.doc, el), b = bounds(u.ed.doc.get(pic));
+  const crosses = pts.slice(1).some((p, i) => { const q = pts[i]; const x0 = Math.min(p[0], q[0]), x1 = Math.max(p[0], q[0]), y0 = Math.min(p[1], q[1]), y1 = Math.max(p[1], q[1]); return x1 > b.x && x0 < b.x + b.w && y1 > b.y && y0 < b.y + b.h; });
+  expect(crosses).toBe(false);
+});

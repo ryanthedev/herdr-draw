@@ -150,6 +150,18 @@ export function shapeAt(doc, p, except) {
   return null;
 }
 
+// What an arrow end can bind to: shapes (not frames) and images. Topmost first.
+export const bindable = el => (isShape(el) && el.type !== "frame") || el.type === "image";
+export function bindTargetAt(doc, p, except) {
+  const els = doc.visible();
+  for (let i = els.length - 1; i >= 0; i--) {
+    const el = els[i];
+    if (!bindable(el) || el.id === except) continue;
+    if (inBox(toLocal(el, p), bbox(el), 4)) return el;
+  }
+  return null;
+}
+
 // Where a ray from a shape's center toward (tx, ty) leaves its outline, plus gap.
 export function edgePoint(el, tx, ty, gap = 6) {
   const a = angleOf(el);
@@ -178,7 +190,7 @@ export function resolvedPoints(doc, el) {
     if (memo.get(el.id)?.key === key) return memo.get(el.id).pts.map(p => [...p]);
     const end = p => ({ point: { x: p[0], y: p[1] } });
     const fromBox = s ? bounds(s) : null, toBox = e ? bounds(e) : null;
-    const obstacles = doc.visible().filter(o => isShape(o) && o.type !== "frame" && o !== s && o !== e).map(bounds);
+    const obstacles = doc.visible().filter(o => bindable(o) && o !== s && o !== e).map(bounds);
     const r = elbowRoute(fromBox ? { box: fromBox } : end(pts[0]), toBox ? { box: toBox } : end(pts[pts.length - 1]), el.startBinding?.gap ?? el.endBinding?.gap ?? 6, obstacles);
     const out = r.points.map(p => [p.x, p.y]);
     memo.set(el.id, { key, pts: out });
