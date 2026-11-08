@@ -31,6 +31,18 @@ const FACES = {
 const DATA_URL = /^data:image\/(?:png|jpeg|gif|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/;
 
 // `scale`: pixels per unit. The viewBox stays in drawing units; only the pixel size grows.
+// Does a data URL's payload start with its declared raster format's magic bytes? (As base64:
+// PNG \x89PNG\r\n\x1a\n, JPEG \xff\xd8\xff, GIF8, RIFF....WEBP.) A rasterizer may sniff content,
+// so an SVG labeled image/png must not get through.
+function rasterBytes(url) {
+  const [, mime, b] = /^data:(image\/[a-z+]+);base64,(.*)$/s.exec(url) ?? [];
+  if (mime === "image/png") return b.startsWith("iVBORw0KGgo");
+  if (mime === "image/jpeg") return b.startsWith("/9j/");
+  if (mime === "image/gif") return b.startsWith("R0lGOD");
+  if (mime === "image/webp") return b.startsWith("UklGR") && b[11] === "X" && b.slice(12, 16) === "RUJQ";   // "RIFF" … "WEBP" at bytes 8–11
+  return false;
+}
+
 // `svgImages: false` for anything a rasterizer will read (PNG export): an embedded SVG picture is the
 // board's content, and its own links (file://, http) could make sips fetch them. Browsers don't.
 export function toSvg(items, { width, height, background, font = FACES.sans, files = {}, scale = 1, svgImages = true } = {}) {
@@ -47,7 +59,7 @@ export function toSvg(items, { width, height, background, font = FACES.sans, fil
     } else if (it.t === "image") {
       const url = files?.[it.fileId]?.dataURL;
       if (typeof url !== "string" || !DATA_URL.test(url)) continue;
-      if (!svgImages && url.startsWith("data:image/svg+xml")) continue;
+      if (!svgImages && !rasterBytes(url)) continue;
       const deg = num(it.angle) * 180 / Math.PI, x = num(it.x), y = num(it.y), w = Math.max(0, num(it.w)), h = Math.max(0, num(it.h));
       const turn = deg ? ` transform="rotate(${deg.toFixed(2)} ${num(it.cx).toFixed(1)} ${num(it.cy).toFixed(1)})"` : "";
       out.push(`<image href="${url}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" preserveAspectRatio="none" opacity="${op.toFixed(3)}"${turn}/>`);

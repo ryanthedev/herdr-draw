@@ -4,8 +4,8 @@ For the next session picking this up. Read `CLAUDE.md` first (architecture, port
 
 ## Where it stands
 
-- All work is committed locally on `main` and **not pushed** (no remote yet). Latest: images, boards over 1 MiB, SVG export of photo boards (see `git log`).
-- `bun test`: 92 tests, all passing. Snapshots in `test/out/*.png`.
+- All work is committed locally on `main` and **not pushed** (no remote yet). Latest: PNG export (see `git log`).
+- `bun test`: 103 tests, all passing. Snapshots in `test/out/*.png`.
 - Installed into `~/.config/herdr-app/mods/herdr-draw` (via `scripts/dev-sync.sh`); `drawh` is on PATH (`~/.local/bin/drawh` → the installed copy).
 
 Built so far (commit order):
@@ -55,8 +55,11 @@ Window `31533` / `~/.cache/eht` belongs to the engram agent: leave it alone.
    Unverified: opening a board with images in excalidraw.com (the format follows Excalidraw's `image` + `files`).
    The image cache is named by the SHA-1 of the decoded bytes, never by a board's file id (a hostile board can't alias another picture).
    Watch out: this shell had `HERDR_APP_HOME=~/.cache/hdt` set, so `scripts/dev-sync.sh` installed into the test home; use
-   `env -u HERDR_APP_HOME sh scripts/dev-sync.sh` to install for the person. Another session also works in this repo (commit `0e27966`).
-2. **PNG export.** No rasterizer in the mod: shell out to headless Chrome like `test/harness/raster.js`, or `sips` an SVG (check quality).
+   `env -u HERDR_APP_HOME sh scripts/dev-sync.sh` to install for the person. (t2r, who made `0e27966`, has stood down: one writer now.)
+   The person's board pane was reopened on the final build at ~17:40; its pane id lives in `~/.local/state/herdr-core/default/docs.json`
+   (`herdr-app ls` lists terminals only, not mod panes).
+2. ~~PNG export~~ done (2026-11-08): ⌘⇧E writes `board.svg` + a 2× `board.png` (sips), cropped to the drawing on the board's
+   page color; `herdr-app do herdr-draw.export`; `drawh export FILE [--svg] [--dark] [--out]`. Verified live via the command.
 3. **Library / templates** (save a selection, insert it; Excalidraw `.excalidrawlib` format).
 4. **Elbow fidelity**: write Excalidraw's `fixedPoint` bindings so elbows open right in excalidraw.com; measure routing cost when dragging a hub with many elbows.
 5. **Text measuring**: wrapping uses an estimated glyph width (`core/text.js` `CHAR_W`); hand and mono fonts wrap a bit off.

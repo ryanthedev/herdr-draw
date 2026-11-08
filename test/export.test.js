@@ -89,3 +89,20 @@ test("a raster export leaves out embedded SVG pictures (their links could make t
   expect(raster).not.toContain("svg+xml");
   expect(raster).toContain(PNG);
 });
+
+test("a raster export keeps a picture only if its bytes match its declared format (no SVG dressed as PNG)", () => {
+  const b64 = s => Buffer.from(s, "binary").toString("base64");
+  const files = {
+    png: { dataURL: PNG },
+    fake: { dataURL: "data:image/png;base64," + Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>').toString("base64") },
+    jpg: { dataURL: "data:image/jpeg;base64," + b64("\xff\xd8\xff\xe0rest") },
+    gif: { dataURL: "data:image/gif;base64," + b64("GIF89a....") },
+    webp: { dataURL: "data:image/webp;base64," + b64("RIFF\x10\x00\x00\x00WEBPVP8 ") },
+    badwebp: { dataURL: "data:image/webp;base64," + b64("RIFF\x10\x00\x00\x00WAVEfmt ") },
+  };
+  const items = Object.keys(files).map(fileId => ({ t: "image", fileId, x: 0, y: 0, w: 1, h: 1 }));
+  const raster = toSvg(items, { files, svgImages: false });
+  for (const k of ["png", "jpg", "gif", "webp"]) expect(raster).toContain(files[k].dataURL);
+  for (const k of ["fake", "badwebp"]) expect(raster).not.toContain(files[k].dataURL);
+  expect(toSvg(items, { files })).toContain(files.fake.dataURL);   // the SVG export doesn't sniff: a browser's <image> is safe
+});

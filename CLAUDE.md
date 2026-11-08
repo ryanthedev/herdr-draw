@@ -10,7 +10,8 @@ core/            pure JS, no imports from Herdr, the DOM, Node or the network
   model.js       element factory, layers, versions (Excalidraw format + customData)
   doc.js         the board in memory; Doc.apply(op) is the ONLY way it changes
   geometry.js    boxes, hit testing, arrow binding, resize mapping
-  render.js      board → display list (paths + text, screen coords)
+  render.js      board → display list (paths + text + images, screen coords)
+  export.js      the drawing cropped to what's painted, any pixel ratio, on the board's page color
   anim.js        timeline presets / keyframes → per-element state at time t
   editor.js      tools, gestures, selection, undo, layers, align, clipboard, commands
 adapters/herdr/  the Herdr mod: GPUI events → editor; display list → GPUI. store.js = file port
@@ -31,7 +32,7 @@ Herdr-draw data lives where Excalidraw keeps foreign data: `customData.{layer,z,
 
 ## Dev loop
 
-- `bun test` (90 tests). `drawh mermaid` runs core/mermaid.js through node (or bun), so agents and the pane lay out alike. Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
+- `bun test` (103 tests). `drawh mermaid` runs core/mermaid.js through node (or bun), so agents and the pane lay out alike. Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
 - `scripts/dev-sync.sh` builds `build/herdr-draw` (adapter + core + svg + drawh) and installs a **copy** into `~/.config/herdr-app/mods/herdr-draw`.
 - See the real window only with `herdr-app shot` (passive). **Never drive the person's mouse or keyboard** to test (theGrid input tools land in whatever app is focused).
 
@@ -71,4 +72,8 @@ sent only to that window's id; quit it by its pid when done.
 - Herdr's `readTextFile` rejects files over **1 MiB** (verified live: a board with two photos wouldn't open, and the watch loop died).
   All board I/O goes through `adapters/herdr/io.js`: big files are read with `cat` (exec caps output at 8 MiB, the board size limit)
   and written as <1 MiB parts joined by `cat` + `mv`. The big write's stale check is read-then-rename, not atomic.
+- Export (⌘⇧E, `herdr-app do herdr-draw.export`, `drawh export`): SVG from `core/export.js`, PNG = that SVG at 2× through
+  macOS `sips` (verified live; QuickLook crops to a square). Raster exports pass `svgImages: false` to `toSvg`: only pictures whose
+  bytes match their declared PNG/JPEG/GIF/WebP type go to sips, so a board's SVG can't make it fetch files or URLs.
+  Give an SVG background explicit width/height, never `100%`: sips sized it from the pixel size and left a 2× PNG mostly black.
 - Writers other than the pane must bump `version` on every element they change (drawh does), or the pane may keep its copy.
