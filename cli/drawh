@@ -66,6 +66,7 @@ def base(kind, **kw):
 
 
 def text_el(text, x, y, size=20, container=None, color=COLORS["default"]):
+    text = text.replace("\\n", "\n")   # `--label "two\nlines"` from a shell
     lines = text.split("\n")
     w, h = max(len(l) for l in lines) * size * 0.56, len(lines) * size * 1.25
     return base("text", x=x, y=y, width=w, height=h, text=text, originalText=text, fontSize=size, fontFamily=1,
@@ -159,6 +160,7 @@ def bound(el, eid, kind):
 
 def set_label(scene, shape, text):
     old = label_of(scene, shape)
+    text = text.replace("\\n", "\n")
     if old:
         old["text"] = old["originalText"] = text
         touch(old)

@@ -26,3 +26,10 @@ test("drawh boards load with their layers, bindings and animation", () => {
   expect(animState(b, 150).opacity).toBe(0);
   expect(ed.displayList({ fg: "#fff", bg: "#000", accent: "#0ff", dim: "#888" }).length).toBeGreaterThan(4);
 });
+
+test("drawh: \\n in a label is a line break", () => {
+  const f = `${mkdtempSync(`${tmpdir()}/drawh-`)}/b.excalidraw`;
+  drawh("add", f, "rect", "--at", "0,0", "--label", "two\\nlines");
+  const ed = new Editor({ scene: JSON.parse(readFileSync(f, "utf8")) });
+  expect(ed.doc.live().find(e => e.type === "text").text).toBe("two\nlines");
+});

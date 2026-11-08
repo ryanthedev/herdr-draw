@@ -8,6 +8,7 @@
 import { DEFAULT_STROKE, isShape, isLinear, isLabel } from "./model.js";
 import { bbox, resolvedPoints } from "./geometry.js";
 import { animState } from "./anim.js";
+import { labelLines } from "./text.js";
 
 export function rng(seed) {
   let s = (seed >>> 0) || 1;
@@ -106,7 +107,8 @@ export function paintElement(doc, el, P, view, theme, out, opts = {}) {
       const box = doc.get(el.containerId); if (!box) return;
       const b = bbox(box), [x0, y0] = Q(b.x, b.y), [x1, y1] = Q(b.x + b.w, b.y + b.h);
       const color = box.backgroundColor !== "transparent" && INK.has(el.strokeColor) ? "#1e1e1e" : ink(el.strokeColor, theme);
-      out.push({ t: "text", id: el.id, x: x0, y: y0, text: el.text, size: el.fontSize * s * (a?.scale ?? 1), color, align: "center", box: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, lineHeight: el.lineHeight ?? 1.25, opacity, reveal: progress });
+      const text = isShape(box) ? labelLines(el, box).join("\n") : el.text;   // labels wrap to their shape
+      out.push({ t: "text", id: el.id, x: x0, y: y0, text, size: el.fontSize * s * (a?.scale ?? 1), color, align: "center", box: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, lineHeight: el.lineHeight ?? 1.25, opacity, reveal: progress });
     } else {
       const [x, y] = Q(el.x, el.y);
       out.push({ t: "text", id: el.id, x, y, text: el.text, size: el.fontSize * s * (a?.scale ?? 1), color: ink(el.strokeColor, theme), align: "left", lineHeight: el.lineHeight ?? 1.25, opacity, reveal: progress });

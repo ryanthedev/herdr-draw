@@ -5,7 +5,7 @@
 // Open: pane.split {mod: "herdr-draw", props: {file}}. Agents use `drawh`.
 
 import { View, div, PathBuilder } from "gpui-kit";
-import { v_flex, h_flex, InputState, Input } from "gpui-base";
+import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
 import { props, exec, theme, settings, home, nextCommand, panes, readTextFile, writeTextFile } from "herdr";
 import { Editor, TOOLS, STROKES, FILLS, WIDTHS, STYLES } from "./core/editor.js";
 import { withAlpha, paintScene } from "./core/render.js";
@@ -32,7 +32,9 @@ export default class Draw extends View {
     this.flash = null; this.sidebar = p.sidebar ?? true; this.selKey = "";
     this.tick = null; this.size = { w: 900, h: 600 }; this.measured = false;   // a default size so panels render before layout this.textOpen = false; this.renaming = null;
     this.handle = cx.focus_handle();
-    this.input = InputState.new({ value: "", placeholder: "Type…" });
+    // Multi-line: a submit with ⌘ (or any submit, if Enter submits) commits; Escape or a click outside commits too.
+    this.input = TextareaState.new({ value: "", placeholder: "Type… (⌘⏎ or Esc to finish)", rows: 1 });
+    this.input.set_auto_grow?.(1, 10);
     this.input.on("change", (_e, cx) => { this.ed.setText(this.input.value()); this.after(cx); });
     this.input.on("submit", (_e, cx) => { this.ed.commitText(); this.after(cx); });
     this.input.on("focus", () => { this.inputFocused = true; });
@@ -103,9 +105,10 @@ export default class Draw extends View {
     const m = e.modifiers ?? {}, v = this.input.value();
     if (m.platform || m.control) return false;
     let next = null;
-    if (e.key === "enter") { this.ed.commitText(); this.after(cx); return true; }
+    if (e.key === "enter" && m.shift) next = v + "\n";
+    else if (e.key === "enter") { this.ed.commitText(); this.after(cx); return true; }
     if (e.key === "escape") { this.ed.commitText(); this.after(cx); return true; }
-    if (e.key === "backspace") next = v.slice(0, -1);
+    else if (e.key === "backspace") next = v.slice(0, -1);
     else if (e.key === "space") next = v + " ";
     else { const ch = e.key_char ?? (e.key.length === 1 ? (m.shift ? e.key.toUpperCase() : e.key) : null); if (ch) next = v + ch; }
     if (next === null) return false;
@@ -116,6 +119,7 @@ export default class Draw extends View {
   keys(e, cx) {
     if (this.renaming) return;
     if (this.ed.text && !this.inputFocused) { if (this.typeFallback(e, cx)) cx.stop_propagation(); return; }
+    if (this.ed.text && (e.key === "escape" || (e.key === "enter" && (e.modifiers?.platform || e.modifiers?.control)))) { this.ed.setText(this.input.value()); this.ed.commitText(); cx.stop_propagation(); return this.after(cx); }
     const ed = this.ed, m = e.modifiers ?? {}, mm = { shift: m.shift, alt: m.alt, cmd: m.platform, ctrl: m.control };
     if (!ed.text && m.platform && (e.key === "c" || e.key === "x")) {
       // The system clipboard gets Excalidraw's format, so paste works in excalidraw.com too.
@@ -244,8 +248,8 @@ export default class Draw extends View {
 
   textInput(t) {
     const b = this.ed.textBox(); if (!b) return div();
-    return div().absolute().left(b.x).top(b.y).w(b.w).h(36).px(6).rounded(6).border(1).border_color(t.accent).bg(t.background).flex().items_center()
-      .child(Input.new(this.input).flex_1().h(30).text_size(Math.min(28, b.size)).text_color(t.foreground));
+    return div().absolute().left(b.x).top(b.y).w(b.w).min_h(b.h).px(6).py(3).rounded(6).border(1).border_color(t.accent).bg(t.background)
+      .child(Textarea.new(this.input).w_full().text_size(Math.min(28, b.size)).text_color(t.foreground));
   }
 
   emptyHint(t) {

@@ -100,6 +100,20 @@ test("typing works whether or not the text box got the keyboard", async () => {
   expect(find(ui.tree(), n => n.kind === "input").state.focused).toBe(true);
 });
 
+test("multi-line text: the editor is a textarea; shift-Enter adds a line, Escape finishes", async () => {
+  const ui = await open();
+  ui.key("t"); ui.on("on_mouse_down:left", ui.ev(300, 520)); ui.on("on_mouse_up:left", ui.ev(300, 520));
+  const box = find(ui.tree(), n => n.kind === "input");
+  expect(box.multiline).toBe(true);
+  // Keyboard not on the box yet: the pane types into it.
+  ui.key("a"); ui.key("enter", { shift: true }); ui.key("b");
+  expect(ui.view.ed.text.value).toBe("a\nb");
+  ui.tree(); await ui.cx.flush(1);                        // the box takes the keyboard after the frame
+  ui.input().type("a\nb\nc");
+  ui.key("escape");                                       // bubbles to the pane: finish
+  expect(ui.view.ed.doc.live().some(e => e.type === "text" && e.text === "a\nb\nc")).toBe(true);
+});
+
 test("opening a board never zooms past 100%", async () => {
   const ui = await open();
   expect(ui.view.ed.view.scale).toBeLessThanOrEqual(1);

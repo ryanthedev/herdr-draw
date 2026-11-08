@@ -70,6 +70,8 @@ export function installFakes({ file, home }) {
     v_flex: () => makeEl("div", { flex: "col" }),
     h_flex: () => makeEl("div", { flex: "row" }),
     InputState: { new: o => new FakeInput(o) },
+    TextareaState: { new: o => new FakeInput(o) },
+    Textarea: { new: state => { focus.rendered.add(state); return makeEl("input", { state, multiline: true }); } },
     Input: { new: state => { focus.rendered.add(state); return makeEl("input", { state }); } },
   }));
   mock.module("herdr", () => ({

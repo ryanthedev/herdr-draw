@@ -14,6 +14,7 @@ import {
 } from "./geometry.js";
 import { paintScene, paintElement, project, rectCmds, withAlpha } from "./render.js";
 import { PRESETS, timelineEnd } from "./anim.js";
+import { labelHostHeight } from "./text.js";
 
 export const TOOLS = [
   { id: "select", keys: ["v", "1"], icon: "↖", name: "Select" },
@@ -362,8 +363,20 @@ export class Editor {
     }
     const to = { x: Math.min(x0, x1), y: Math.min(y0, y1), w: Math.max(1, Math.abs(x1 - x0)), h: Math.max(1, Math.abs(y1 - y0)) };
     const els = [];
-    for (const [, o] of g.orig) { const c = clone(o); mapIntoBox(c, o, b, to); els.push(c); }
+    for (const [, o] of g.orig) {
+      const c = clone(o); mapIntoBox(c, o, b, to);
+      // A shape never gets shorter than its wrapped label (it grows as it narrows).
+      const l = isShape(c) && this.doc.labelOf(c); if (l) this.fitHost(c, l);
+      els.push(c);
+    }
     this.livePut(...els);
+  }
+
+  // Grow a shape downward until its label fits (Excalidraw does the same).
+  fitHost(host, label) {
+    if (!label?.text) return;
+    const need = labelHostHeight(label, host);
+    if (Math.abs(host.height) < need) host.height = need;
   }
 
   movePoint(g, w) {
@@ -529,7 +542,8 @@ export class Editor {
     const b = host ? bbox(host) : { x: el.x, y: el.y, w: Math.max(200, textSize(t.value || "M", el.fontSize).w), h: el.fontSize * 1.4 };
     const a = this.toScreen(b), s = this.view.scale;
     if (t.frame) return { x: a.x, y: a.y - 26, w: Math.max(160, b.w * s), h: 24, size: 13, align: "left" };
-    return { x: a.x, y: host ? a.y + (b.h * s) / 2 - 18 : a.y, w: Math.max(160, b.w * s), h: 36, size: Math.max(12, el.fontSize * s), align: host ? "center" : "left" };
+    const lines = Math.max(1, String(t.value).split("\n").length), h = Math.max(36, lines * el.fontSize * s * 1.3 + 14);
+    return { x: a.x, y: host ? a.y + (b.h * s) / 2 - h / 2 : a.y, w: Math.max(160, b.w * s), h, size: Math.max(12, el.fontSize * s), align: host ? "center" : "left", lines };
   }
 
   setText(v) { if (this.text) { this.text.value = v; this.changed(); } }
@@ -548,9 +562,10 @@ export class Editor {
       if (!el) return;
       el.text = el.originalText = value;
       const s = textSize(value, el.fontSize, el.lineHeight); el.width = s.w; el.height = s.h;
-      if (el.containerId && t.isNew) {
+      if (el.containerId) {
         const host = tx.get(el.containerId);
-        if (host) host.boundElements = (host.boundElements ?? []).concat([{ id: el.id, type: "text" }]);
+        if (host && t.isNew) host.boundElements = (host.boundElements ?? []).concat([{ id: el.id, type: "text" }]);
+        if (host && isShape(host)) this.fitHost(host, el);
       }
     });
     this.select([this.text?.id ?? (this.doc.get(t.id)?.containerId ?? t.id)]);
@@ -699,7 +714,12 @@ export class Editor {
       for (const e of els) {
         const c = tx.get(e.id);
         for (const [k, v] of Object.entries(patch)) {
-          if (k === "fontSize") { if (c.type === "text") c.fontSize = v; const l = isShape(e) && this.doc.labelOf(e); if (l) tx.get(l.id).fontSize = v; continue; }
+          if (k === "fontSize") {
+            if (c.type === "text") { c.fontSize = v; const host = c.containerId && tx.get(c.containerId); if (host && isShape(host)) this.fitHost(host, c); }
+            const l = isShape(e) && this.doc.labelOf(e);
+            if (l) { const cl = tx.get(l.id); cl.fontSize = v; this.fitHost(c, cl); }
+            continue;
+          }
           if (k === "backgroundColor" && !isShape(c)) continue;
           if (k === "endArrowhead" || k === "startArrowhead") { if (c.type === "arrow" || c.type === "line") c[k] = v; continue; }
           c[k] = v;
