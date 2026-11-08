@@ -22,6 +22,9 @@ Coordinates are scene pixels, x right, y down. Shapes are 140x80 unless --w/--h.
   drawh export FILE [--out PATH] [--svg] [--dark] [--scale 2]
                                                 the drawing, cropped, as a PNG (2x, via sips) or SVG; on the
                                                 board's page color (--dark: dark page); prints the path
+  drawh lib ls | add FILE ID... [--name N] | insert FILE NAME|ID [--at X,Y] | import PATH.excalidrawlib | rm NAME|ID
+                                                the shared library (excalidraw.com's .excalidrawlib format), also in the
+                                                pane's sidebar; --lib PATH for another file
   drawh rotate FILE ID... DEG                   turn elements by DEG degrees (clockwise) about their center
   drawh rm FILE ID...                           delete elements (and their labels)
   drawh clear FILE                              delete everything
@@ -214,6 +217,56 @@ def export_svg(scene, scale, dark, raster=False):
     return run_js(script, json.dumps(scene))
 
 
+def lib_path(arg=None):
+    """The library the pane shows: <app home>/herdr-draw/library.excalidrawlib (HERDR_APP_HOME picks another app home)."""
+    if arg:
+        return os.path.abspath(os.path.expanduser(arg))
+    home = os.environ.get("HERDR_APP_HOME") or os.path.expanduser("~/.config/herdr-app")
+    return os.path.join(home, "herdr-draw", "library.excalidrawlib")
+
+
+def lib_js(op):
+    """Run a library operation with the pane's own core (editor.js, library.js); JSON in, JSON out."""
+    core = core_dir()
+    script = ("import { Editor } from %s; import * as L from %s; import { unionBox, bbox } from %s;"
+              "let s = ''; process.stdin.on('data', d => s += d); process.stdin.on('end', () => { const op = JSON.parse(s); let out;"
+              " if (op.cmd === 'parse') out = L.parseLibrary(op.text);"
+              " else if (op.cmd === 'add') { const ed = new Editor({ scene: op.scene });"
+              "   ed.select(op.ids.flatMap(id => ed.doc.get(id) ? ed.withGroup(ed.doc.get(id)) : []));"
+              "   out = ed.libraryItem(op.name || undefined); }"
+              " else if (op.cmd === 'insert') { const ed = new Editor({ scene: op.scene, onOp: () => {} });"
+              "   let at = op.at; if (!at) { const live = ed.doc.live().filter(e => !(e.type === 'text' && e.containerId));"
+              "     const ib = unionBox(op.item.elements.filter(e => !(e.type === 'text' && e.containerId)).map(bbox));"
+              "     const b = live.length ? unionBox(live.map(bbox)) : { x: 0, y: -80, w: 0, h: 0 };"
+              "     at = { x: b.x + ib.w / 2, y: b.y + b.h + 80 + ib.h / 2 }; }"
+              "   const ids = ed.insertLibraryItem(op.item, at); out = { scene: ed.scene(), ids }; }"
+              " process.stdout.write(JSON.stringify(out)); });") % tuple(json.dumps("file://" + os.path.join(core, m)) for m in ("editor.js", "library.js", "geometry.js"))
+    return json.loads(run_js(script, json.dumps(op)))
+
+
+def lib_load(path):
+    try:
+        with open(path) as f:
+            return lib_js({"cmd": "parse", "text": f.read()})
+    except FileNotFoundError:
+        return []
+
+
+def lib_save(path, items):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".drawh.tmp"
+    with open(tmp, "w") as f:
+        json.dump({"type": "excalidrawlib", "version": 2, "source": "herdr-draw", "libraryItems": items}, f, indent=2)
+    os.replace(tmp, path)
+
+
+def lib_find(items, ref):
+    hit = [i for i in items if i["id"] == ref] or [i for i in items if i.get("name") == ref]
+    if not hit:
+        die(f"no library item {ref!r} (drawh lib ls)")
+    return hit[0]
+
+
 def touch(el):
     el["version"] = el.get("version", 1) + 1
     el["versionNonce"] = rnd()
@@ -327,6 +380,8 @@ def main():
     im = sub.add_parser("image"); im.add_argument("file"); im.add_argument("src"); im.add_argument("--at"); im.add_argument("--w", type=float); im.add_argument("--layer")
     ex = sub.add_parser("export"); ex.add_argument("file"); ex.add_argument("--out"); ex.add_argument("--svg", action="store_true")
     ex.add_argument("--dark", action="store_true"); ex.add_argument("--scale", type=float, default=2)
+    lb_ = sub.add_parser("lib"); lb_.add_argument("op", choices=["ls", "add", "insert", "import", "rm"]); lb_.add_argument("rest", nargs="*")
+    lb_.add_argument("--name"); lb_.add_argument("--at"); lb_.add_argument("--lib")
     ro = sub.add_parser("rotate"); ro.add_argument("file"); ro.add_argument("ids", nargs="+"); ro.add_argument("deg", type=float)
     a.add_argument("--angle", type=float, default=0, help="degrees, clockwise")
     rm = sub.add_parser("rm"); rm.add_argument("file"); rm.add_argument("ids", nargs="+")
@@ -355,6 +410,39 @@ def main():
                 print(json.dumps(json.load(f), indent=1))
         except OSError:
             die("nothing selected yet (click something in the pane)")
+        return
+
+    if args.cmd == "lib":
+        lp = lib_path(args.lib); items = lib_load(lp); r = args.rest
+        if args.op == "ls":
+            for i in items:
+                kinds = sorted({e["type"] for e in i["elements"] if not (e["type"] == "text" and e.get("containerId"))})
+                print(f'{i["id"]:<20} {i.get("name", "(unnamed)"):<24} {len(i["elements"])} elements: {", ".join(kinds)}')
+            if not items:
+                print("(empty)")
+        elif args.op == "add":
+            if len(r) < 2: die("usage: drawh lib add FILE ID... [--name N]")
+            bp = os.path.abspath(os.path.expanduser(r[0])); scene = load(bp)
+            item = lib_js({"cmd": "add", "scene": scene, "ids": [find(scene, x)["id"] for x in r[1:]], "name": args.name})
+            if not item: die("nothing to save")
+            lib_save(lp, [item] + items); print(item["id"])
+        elif args.op == "insert":
+            if len(r) != 2: die("usage: drawh lib insert FILE NAME|ID [--at X,Y]")
+            bp = os.path.abspath(os.path.expanduser(r[0])); scene = load(bp)
+            at = None
+            if args.at:
+                x, y = pair(args.at, "--at"); at = {"x": x, "y": y}
+            res = lib_js({"cmd": "insert", "scene": scene, "item": lib_find(items, r[1]), "at": at})
+            save(bp, res["scene"]); print("\n".join(res["ids"]))
+        elif args.op == "import":
+            if len(r) != 1: die("usage: drawh lib import PATH")
+            with open(os.path.expanduser(r[0])) as f:
+                new = lib_js({"cmd": "parse", "text": f.read()})
+            have = {i["id"] for i in items}; add = [i for i in new if i["id"] not in have]
+            lib_save(lp, add + items); print(f"{len(add)} item{'s' if len(add) != 1 else ''} added")
+        elif args.op == "rm":
+            if len(r) != 1: die("usage: drawh lib rm NAME|ID")
+            gone = lib_find(items, r[0]); lib_save(lp, [i for i in items if i["id"] != gone["id"]])
         return
 
     path = os.path.abspath(os.path.expanduser(args.file))

@@ -1,6 +1,6 @@
 // Contract: whatever `drawh` (the agents' CLI) writes, the core reads, layers and animates correctly.
 import { test, expect } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { Editor } from "../core/editor.js";
 import { animState } from "../core/anim.js";
@@ -81,4 +81,31 @@ test("drawh export: a cropped 2x PNG (or --svg) without the pane, on the board's
   expect(s).toContain('fill="#ffffff"');
   expect(s).toContain("<image href=\"data:image/png;base64,");
   expect(readFileSync(drawh("export", f, "--svg", "--dark", "--out", `${dir}/d.svg`), "utf8")).toContain('fill="#121212"');
+});
+
+test("drawh lib: save elements from a board, list, insert into another board (still bound), import, remove", () => {
+  const dir = mkdtempSync(`${tmpdir()}/drawh-`), a = `${dir}/a.excalidraw`, b = `${dir}/b.excalidraw`, lib = `${dir}/lib.excalidrawlib`;
+  drawh("add", a, "rect", "--at", "0,0", "--label", "Client");
+  drawh("add", a, "rect", "--at", "300,0", "--label", "Server");
+  drawh("arrow", a, "Client", "Server");
+  const arrow = JSON.parse(readFileSync(a, "utf8")).elements.find(e => e.type === "arrow").id;
+  expect(drawh("lib", "add", a, "Client", "Server", arrow, "--name", "Client/server", "--lib", lib)).toMatch(/^\S+$/);
+  expect(drawh("lib", "ls", "--lib", lib)).toContain("Client/server");
+  drawh("add", b, "ellipse", "--at", "0,0");
+  const ids = drawh("lib", "insert", b, "Client/server", "--lib", lib).split("\n");
+  const ed = new Editor({ scene: JSON.parse(readFileSync(b, "utf8")) });
+  const ar = ed.doc.live().find(e => e.type === "arrow");
+  expect(ids).toContain(ar.id);
+  expect(ids).toContain(ar.startBinding.elementId);
+  expect(ids).toContain(ar.endBinding.elementId);
+  expect(ed.doc.live().filter(e => e.type === "text").map(e => e.text).sort()).toEqual(["Client", "Server"]);
+  const top = Math.min(...ed.doc.live().filter(e => ids.includes(e.id) && e.type === "rectangle").map(e => e.y));
+  expect(top).toBeGreaterThanOrEqual(80);                                      // below what was there
+  // Import an excalidraw.com library (v1), then remove an item by name.
+  writeFileSync(`${dir}/x.excalidrawlib`, JSON.stringify({ type: "excalidrawlib", version: 1, library: [[{ id: "z", type: "diamond", x: 0, y: 0, width: 50, height: 50 }]] }));
+  expect(drawh("lib", "import", `${dir}/x.excalidrawlib`, "--lib", lib)).toContain("1 item");
+  expect(drawh("lib", "ls", "--lib", lib).split("\n").length).toBe(2);
+  drawh("lib", "rm", "Client/server", "--lib", lib);
+  expect(drawh("lib", "ls", "--lib", lib)).not.toContain("Client/server");
+  expect(JSON.parse(readFileSync(lib, "utf8"))).toMatchObject({ type: "excalidrawlib", version: 2 });
 });

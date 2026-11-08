@@ -60,7 +60,13 @@ Window `31533` / `~/.cache/eht` belongs to the engram agent: leave it alone.
    (`herdr-app ls` lists terminals only, not mod panes).
 2. ~~PNG export~~ done (2026-11-08): ⌘⇧E writes `board.svg` + a 2× `board.png` (sips), cropped to the drawing on the board's
    page color; `herdr-app do herdr-draw.export`; `drawh export FILE [--svg] [--dark] [--out]`. Verified live via the command.
-3. **Library / templates** (save a selection, insert it; Excalidraw `.excalidrawlib` format).
+3. **Library** (in progress, 2026-11-08). Done: `core/library.js` (.excalidrawlib v1/v2 read, v2 write, items carry picture files),
+   `Editor.insertElements` (the paste remap, shared; fresh group ids), `Editor.libraryItem()/insertLibraryItem()`, and
+   `drawh lib ls|add|insert|import|rm` (file: `<HERDR_APP_HOME or ~/.config/herdr-app>/herdr-draw/library.excalidrawlib`, `--lib`).
+   Next/seam: the pane's sidebar "Library" section (previews via `paintedBox`+`paintScene` on a throwaway Doc, paths only;
+   click inserts, "+" saves the selection, ✕ removes), file read/written through `io.js`, `watchFolder` on that subfolder only,
+   and dropping a `.excalidrawlib` merges it. Live route: set `"sidebar": true` in `~/.cache/hdt/layouts/drawtest.json`
+   (restore after), `HERDR_APP_HOME=~/.cache/hdt drawh lib add …`, watch the panel with `herdr-app shot`, then `drawh lib insert`.
 4. **Elbow fidelity**: write Excalidraw's `fixedPoint` bindings so elbows open right in excalidraw.com; measure routing cost when dragging a hub with many elbows.
 5. **Text measuring**: wrapping uses an estimated glyph width (`core/text.js` `CHAR_W`); hand and mono fonts wrap a bit off.
 6. Networking (deferred by the person): another `onOp` / `receive` pair; presence already renders from `editor.peers`.
