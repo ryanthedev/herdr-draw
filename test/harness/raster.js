@@ -14,12 +14,15 @@ function findChrome() {
   throw new Error("no Playwright chromium_headless_shell in " + root);
 }
 
+// One browser for the whole run. Test files share this module, so a file must not
+// close it for the others: relaunch if it went away, and close only at exit.
 let browser = null;
 export async function rasterize(svg, outPath, { width, height }) {
-  browser ??= await chromium.launch({ executablePath: findChrome(), headless: true });
+  if (!browser?.isConnected()) browser = await chromium.launch({ executablePath: findChrome(), headless: true });
   const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 1 });
   await page.setContent(`<html><body style="margin:0">${svg}</body></html>`);
   await page.screenshot({ path: outPath });
   await page.close();
 }
-export async function closeRaster() { await browser?.close(); browser = null; }
+export async function closeRaster() { /* kept open for the other test files; closed at exit */ }
+process.on("beforeExit", async () => { const b = browser; browser = null; await b?.close(); });

@@ -16,6 +16,7 @@ import {
 import { paintScene, paintElement, project, rectCmds, withAlpha } from "./render.js";
 import { PRESETS, timelineEnd } from "./anim.js";
 import { labelHostHeight } from "./text.js";
+import { isMermaid, mermaidToElements } from "./mermaid.js";
 
 export const TOOLS = [
   { id: "select", keys: ["v", "1"], icon: "↖", name: "Select" },
@@ -706,7 +707,22 @@ export class Editor {
     return this.clipboard;
   }
 
+  // A Mermaid flowchart becomes editable shapes, laid out, centered at `at`; returns the new ids.
+  importMermaid(src, at = this.toWorld({ x: this.size.w / 2, y: this.size.h / 2 })) {
+    const { elements } = mermaidToElements(src, { layer: this.activeLayer, z: this.doc.maxZ(this.activeLayer) });
+    const box = unionBox(elements.filter(e => e.type !== "text").map(bbox));
+    const dx = at.x - (box.x + box.w / 2), dy = at.y - (box.y + box.h / 2);
+    this.transact(tx => { for (const e of elements) { e.x += dx; e.y += dy; tx.add(e); } });
+    const ids = elements.filter(e => !isLabel(e)).map(e => e.id);
+    this.select(ids);
+    // Bring it all into view if it doesn't fit (Excalidraw zooms to imported content too).
+    const nb = unionBox(this.selected().map(bounds)), a = this.toScreen(nb), z = this.toScreen({ x: nb.x + nb.w, y: nb.y + nb.h });
+    if (a.x < 0 || a.y < 0 || z.x > this.size.w || z.y > this.size.h) this.fit(this.selected());
+    return ids;
+  }
+
   paste(text = this.clipboard, at) {
+    if (isMermaid(text)) { try { this.importMermaid(text, at); this.flash = "imported Mermaid"; } catch (e) { this.flash = String(e.message ?? e); } return; }
     let data; try { data = JSON.parse(text); } catch { data = null; }
     if (!data?.elements?.length) {
       if (text && typeof text === "string") { const c = at ?? this.toWorld({ x: this.size.w / 2, y: this.size.h / 2 }); this.beginText(null, c); this.text.value = text; this.commitText(); }

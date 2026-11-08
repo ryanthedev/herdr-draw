@@ -112,6 +112,11 @@ export function paintElement(doc, el, P, view, theme, out, opts = {}) {
       const b = bbox(box), [x0, y0] = Q(b.x, b.y), [x1, y1] = Q(b.x + b.w, b.y + b.h);
       const color = box.backgroundColor !== "transparent" && INK.has(el.strokeColor) ? "#1e1e1e" : ink(el.strokeColor, theme);
       const text = isShape(box) ? labelLines(el, box).join("\n") : el.text;   // labels wrap to their shape
+      if (isLinear(box)) {   // on a line: a patch of background behind the text, like Excalidraw's gap
+        const lines = String(text).split("\n"), s2 = el.fontSize * s, w = Math.max(...lines.map(l => l.length)) * s2 * 0.56 + 10, h = lines.length * s2 * (el.lineHeight ?? 1.25) + 4;
+        const [mx, my] = Q(b.x + b.w / 2, b.y + b.h / 2);
+        out.push({ t: "path", id: el.id + ":bg", cmds: [["M", mx - w / 2, my - h / 2], ["L", mx + w / 2, my - h / 2], ["L", mx + w / 2, my + h / 2], ["L", mx - w / 2, my + h / 2]], fill: theme.bg, opacity });
+      }
       const [cx, cy] = Q(b.x + b.w / 2, b.y + b.h / 2);
       out.push({ t: "text", id: el.id, angle: angleOf(box), cx, cy, x: x0, y: y0, text, size: el.fontSize * s * (a?.scale ?? 1), color, align: "center", box: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, lineHeight: el.lineHeight ?? 1.25, opacity, reveal: progress });
     } else {
