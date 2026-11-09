@@ -65,6 +65,17 @@ when sips can't find the terminal font; images still stay upright in the pane (`
 iPad: no native path yet. Heel (~/repos/herdr-mobile, iPhone) lists herdr-draw editing as a goal but draws no boards;
 boards open in excalidraw.com in Safari; a canvas adapter on core (touch → pointer ports) is the route to native.
 
+## Boards (2026-11-09, fifth session)
+
+- Picker: ⌘O (or ⌃O, or the board name in the toolbar, or `herdr-app do herdr-draw.open`) lists recent boards
+  (`<appHome>/herdr-draw/recent.json`) and *.excalidraw under ~/boards, the board's folder, the space's folder and the
+  scratch folder (find, depth 4), fuzzy-ranked (`core/boards.js`), with a preview. Enter switches this pane (the board
+  left is saved first); ⌘Enter or the "+ New board" row makes `~/boards/<name>.excalidraw`. A pane remembers its board
+  in localStorage (only while its props are the same). ⌘⇧B (person's keys.json) opens a pane with the picker.
+- The person's global keys win over the pane's own keys (Herdr: more specific section wins; `mod:herdr-draw` would beat
+  `global`). Their globals take ⌘A ⌘D ⌘[ ⌘] ⌘= ⌘- ⌘0 ⌘⇧L (⌘G in matrix). The board treats ⌃ like ⌘, so ⌃ works.
+- Live check: picker list verified in the test window; preview fix verified headless only (the person was back).
+
 ## How to verify in real Herdr (never the person's window)
 
 Isolated home `~/.cache/hdt` already exists (layout `drawtest` shows only the board, file `~/.cache/hdt/t.excalidraw`):

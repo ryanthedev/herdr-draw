@@ -1,6 +1,6 @@
 // The real Herdr adapter, driven headless: built mod + fake GPUI + synthetic mouse/keys.
 import { test, expect, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { installFakes, makeCx, byId, find, textOf, canvasToSvg, THEME } from "./harness/gpui-fake.js";
 import { rasterize, closeRaster } from "./harness/raster.js";
@@ -494,3 +494,42 @@ test("rotated text shows turned: sips draws it as a picture, upright text needs 
   expect(textOf(ui.canvas())).not.toContain("Turned");
   calls.real = null;
 }, 20000);
+
+test("⌘O picks another board: filter, switch (saving the one left first), and a new one by name", async () => {
+  realImages(); const big = calls.real;   // earlier tests leave a big board: its save goes through the shell
+  calls.real = (cmd, args) => big(cmd, args) || cmd === "find" || (cmd === "sh" && args[2] === "write-small");
+  mkdirSync(`${home}/boards`, { recursive: true });
+  writeFileSync(`${home}/boards/Roadmap.excalidraw`, JSON.stringify({ type: "excalidraw", version: 2, elements: [{ id: "rm1", type: "rectangle", x: 0, y: 0, width: 50, height: 40, version: 1, versionNonce: 1, isDeleted: false, strokeColor: "#1e1e1e", backgroundColor: "transparent", strokeWidth: 2, roughness: 1, opacity: 100, seed: 1, angle: 0 }] }));
+  const ui = await open();
+  await ui.cx.flush();
+  ui.click("tool-rectangle"); ui.drag([60, 60], [140, 120]);                  // an edit not saved yet (250 ms timer)
+  const drawn = [...ui.view.ed.sel][0];
+  ui.key("o", { platform: true });
+  expect(byId(ui.tree(), "picker")).toBeTruthy();
+  await ui.cx.flush(); await ui.cx.flush();
+  ui.key("r");                                                               // typing goes to the search, not the tools
+  expect(ui.view.ed.tool).toBe("select");
+  ui.view.pickInput.set_value("road"); ui.view.picker.query = "road"; ui.view.rankPicker();
+  expect(ui.view.picker.rows[0].name).toBe("Roadmap");
+  ui.tree(); await ui.cx.flush(); await ui.cx.flush();                         // the preview loads after the frame
+  const pv = [...ui.view.pv.entries()].find(([k]) => k.startsWith(`${home}/boards/Roadmap.excalidraw|`))?.[1];
+  expect(pv?.layers?.length).toBeGreaterThan(0);
+  expect(textOf(byId(ui.tree(), "picker"))).not.toContain("…");
+  ui.key("enter");
+  await ui.cx.flush(); await ui.cx.flush();
+  expect(ui.view.file).toBe(`${home}/boards/Roadmap.excalidraw`);
+  expect(byId(ui.tree(), "picker")).toBe(null);
+  expect(JSON.parse(readFileSync(file, "utf8")).elements.some(e => e.id === drawn && !e.isDeleted)).toBe(true);   // the board left was saved first
+  expect(ui.view.ed.doc.live().map(e => e.id)).toEqual(["rm1"]);
+  expect(JSON.parse(readFileSync(`${home}/herdr-draw/recent.json`, "utf8"))[0]).toBe(`${home}/boards/Roadmap.excalidraw`);
+  // A new one: type a name, ⌘Enter.
+  ui.click("board-name");
+  ui.view.pickInput.set_value("Sprint plan"); ui.view.picker.query = "Sprint plan"; ui.view.rankPicker();
+  expect(ui.view.picker.rows.at(-1).create).toBe(true);
+  ui.key("enter", { platform: true });
+  await ui.cx.flush(); await ui.cx.flush();
+  expect(ui.view.file).toBe(`${home}/boards/Sprint plan.excalidraw`);
+  expect(existsSync(`${home}/boards/Sprint plan.excalidraw`)).toBe(true);
+  expect(ui.view.ed.doc.live().length).toBe(0);
+  calls.real = null;
+});

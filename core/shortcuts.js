@@ -67,9 +67,14 @@ export const SHORTCUTS = [
     ["⌘⇧E", "Export the board as SVG + PNG"],
     ["drop", "Images and .excalidrawlib libraries"],
   ]],
+  ["Boards", [
+    ["⌘O", "Switch this pane to another board, or make one"],
+    ["board name", "Click it in the toolbar: the same"],
+    ["⌘Enter", "In the list: a new board with the name typed (in ~/boards)"],
+  ]],
   ["Help", [
     ["?", "This list (Esc closes)"],
     ["D in this list", "Play the demo board"],
-    ["⌘⇧B", "Anywhere in Herdr: a new board pane"],
+    ["⌘⇧B", "Anywhere in Herdr: a new pane, pick or make a board"],
   ]],
 ];

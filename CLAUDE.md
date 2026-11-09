@@ -12,6 +12,7 @@ core/            pure JS, no imports from Herdr, the DOM, Node or the network
   geometry.js    boxes, hit testing, arrow binding, resize mapping
   render.js      board → display list (paths + text + images, screen coords)
   export.js      the drawing cropped to what's painted, any pixel ratio, on the board's page color
+  boards.js      the board picker's ranking, recent list and new-board names
   library.js     .excalidrawlib read (v1, v2) / write (v2); Editor.insertElements is the one insert path (paste, library)
   anim.js        timeline presets / keyframes → per-element state at time t
   editor.js      tools, gestures, selection, undo, layers, align, clipboard, commands
@@ -35,13 +36,16 @@ Herdr-draw data lives where Excalidraw keeps foreign data: `customData.{layer,z,
 
 ## Dev loop
 
-- `bun test` (196 tests). `drawh mermaid` runs core/mermaid.js through node (or bun), so agents and the pane lay out alike. Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
+- `bun test` (205 tests). `drawh mermaid` runs core/mermaid.js through node (or bun), so agents and the pane lay out alike. Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
 - `scripts/dev-sync.sh` builds `build/herdr-draw` (adapter + core + svg + drawh) and installs a **copy** into `~/.config/herdr-app/mods/herdr-draw`.
 - `scripts/install.sh` installs **HEAD** into the person's Herdr (ignores `HERDR_APP_HOME`): run it after commits the person
   should test. If `.git/hooks/post-commit` exists (`scripts/install-hook.sh`), every commit to `main` installs itself. ⌘⇧B opens a scratch board. Their notes: `FEEDBACK.md`.
 - See the real window only with `herdr-app shot` (passive). **Never drive the person's mouse or keyboard** to test (theGrid input tools land in whatever app is focused).
 - **Never take the person's focus** (they asked, 2026-11-08): launch test windows with `open -g` only, never activate,
   raise or focus any window (no theGrid focus/raise/input, no `osascript activate`). Check the frontmost app before and after a launch.
+  **`open -g -n` does not guarantee it**: on 2026-11-09 a new test window came to the front anyway (frontmost pid
+  became the test window's). So prefer headless tests and fake-GPUI renders; launch a live test window only while the
+  person is away (frontmost is `loginwindow`) or after asking, and close it at once if it takes the front.
 
 ## Testing in a real Herdr window (never the person's)
 

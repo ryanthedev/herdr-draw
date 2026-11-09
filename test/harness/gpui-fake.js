@@ -85,6 +85,7 @@ export function installFakes({ file, home }) {
     home: () => home,
     appHome: () => home,
     panes: () => [],
+    focused: () => ({ space: "s1", tab: "t1", pane: "p1", terminal: null, shown: null, agent: null, cwd: calls.cwd ?? home }),
     nextCommand: () => new Promise(() => {}),
     watchFolder: () => new Promise(() => {}),
     // Herdr's limits, as seen live: readTextFile rejects files over 1 MiB. writeTextFile's limit

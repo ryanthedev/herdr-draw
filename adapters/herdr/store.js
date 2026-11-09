@@ -26,8 +26,13 @@ export class FileStore {
     this.watch(cx);
   }
 
+  // The pane moves to another board: no more saves or reads for this file. Save first (flush).
+  stop() { this.stopped = true; this.timer?.cancel?.(); this.timer = null; }
+  async flush(cx) { this.timer?.cancel?.(); this.timer = null; await this.save(cx); }
+
   // The board changed: save shortly (one write per burst of edits).
   schedule(cx) {
+    if (this.stopped) return;
     this.timer?.cancel?.();
     this.timer = cx.timer.after(SAVE_DELAY, cx2 => { this.timer = null; this.save(cx2); });
   }
@@ -66,6 +71,7 @@ export class FileStore {
     cx.spawn(async cx => {
       for (;;) {
         const changed = await watchFolder(dir);
+        if (this.stopped) return;
         if (!changed.some(p => p.endsWith("/" + base) || p === this.file || p.endsWith(dir) || p.endsWith(dir.slice(0, -1)))) continue;
         // One bad read must not end live updates for good: report it and keep watching.
         let text;

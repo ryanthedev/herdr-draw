@@ -6,7 +6,7 @@
 
 import { View, div, image, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
-import { props, exec, theme, settings, home, appHome, nextCommand, panes, readTextFile, writeTextFile, fonts } from "herdr";
+import { props, exec, theme, settings, home, appHome, nextCommand, panes, focused, readTextFile, writeTextFile, fonts } from "herdr";
 import { Editor, TOOLS, STROKES, FILLS, WIDTHS, STYLES } from "./core/editor.js";
 import { withAlpha } from "./core/render.js";
 import { PRESET_NAMES } from "./core/anim.js";
@@ -22,8 +22,14 @@ import { FileStore } from "./store.js";
 import { readText, writeText } from "./io.js";
 import { SHORTCUTS } from "./core/shortcuts.js";
 import { demoScene } from "./core/demo.js";
+import { rankBoards, newBoardPath, parseRecent, pushRecent, parseListing, boardName, folderOf, tilde } from "./core/boards.js";
+import { emptyScene } from "./core/model.js";
 
 const MOD = "herdr-draw";
+// Boards: new ones go in ~/boards; the recent list is shared by every board pane.
+const BOARDS_DIR = () => `${home()}/boards`;
+const RECENT = () => `${appHome()}/herdr-draw/recent.json`;
+const PICK_ROWS = 12;
 const Z = () => Number(settings().zoom) || 1;
 const CACHE = () => `${home()}/.cache/herdr-draw`;
 const SIDEBAR = 232;
@@ -103,18 +109,32 @@ function batchPaths(items) {
   return { layers, texts };
 }
 
+// Write a small file in `dir` atomically (temp + mv), fire and forget.
+function cx_free_write(dir, name, text) {
+  exec("sh", ["-c", 'mkdir -p "$1" && printf %s "$3" > "$1/.$2.$$" && mv -f "$1/.$2.$$" "$1/$2"', "write-small", dir, name, text]);
+}
+
 export default class Draw extends View {
   init(_props, cx) {
     const p = props() ?? {};
-    this.file = p.file ? String(p.file).replace(/^~(?=\/)/, home()) : null;
+    this.propFile = p.file ? String(p.file).replace(/^~(?=\/)/, home()) : null;
+    // A pane remembers the board it was switched to (⌘O), as long as it was opened on the same props.
+    let mem = null; try { mem = JSON.parse(localStorage.getItem("board") ?? "null"); } catch { mem = null; }
+    this.file = mem && mem.props === this.propFile && typeof mem.file === "string" ? mem.file : this.propFile;
     // Ops only mark the board dirty; after(cx) schedules the save with the live event's cx
     // (a cx kept past its call is rejected by GPUI).
-    this.ed = new Editor({ onOp: op => { if (!op.transient) this.dirty = true; } });
-    this.error = this.file ? null : "No file: open with props {file}";
+    this.ed = this.newEditor();
+    this.error = null;
+    this.picker = null;     // the board picker: { query, rows, sel, top } while open
+    this.pickInput = InputState.new({ value: "", placeholder: "Find a board, or type a new name" });
+    this.pickInput.on("change", (_e, cx) => { if (this.picker && this.picker.query !== this.pickInput.value()) { this.picker.query = this.pickInput.value(); this.rankPicker(); cx.notify(); } });
+    this.pickInput.on("submit", (e, cx) => { if (e?.secondary) this.pickCreate(cx); else this.pickOpen(cx); });
+    this.boardList = null; this.recent = []; this.pv = new Map();   // listing, recent boards, previews by path
+    this.textOpen = false; this.renaming = null;
     this.flash = null; this.sidebar = p.sidebar ?? true; this.selKey = "";
     this.help = false;      // the ? overlay
     this.board = null;      // while the demo plays: the person's own editor, kept aside (the demo is never saved)
-    this.tick = null; this.size = { w: 900, h: 600 }; this.measured = false;   // a default size so panels render before layout this.textOpen = false; this.renaming = null;
+    this.tick = null; this.size = { w: 900, h: 600 }; this.measured = false;   // a default size so panels render before layout
     this.handle = cx.focus_handle();
     this.rtext = new Map();  // rotated text: element id → { key, path, want: { key, svg }, busy }
     exec("sh", ["-c", 'rm -rf "$1" && mkdir -p "$1"', "txt-reset", TXT_DIR()]);   // regenerated on demand: no stale pile
@@ -138,13 +158,8 @@ export default class Draw extends View {
     this.lib = new LibraryStore({ onChange: () => { this.previews.clear(); }, onError: m => { this.flash = m; } });
     this.previews = new Map();   // library item id → its preview's path layers
     cx.spawn(async acx => { await this.lib.start(acx); });
-    if (this.file) {
-      this.store = new FileStore(this.file, this.ed, {
-        onError: m => { this.error = m; },
-        onExternal: n => { this.error = null; this.flash = `${n} change${n === 1 ? "" : "s"} from the file`; },
-      });
-      cx.spawn(async acx => { await this.store.start(acx); this.fitted = false; this.maybeFit(); acx.notify(); });
-    }
+    if (this.file) this.startStore(cx);
+    else cx.timer.after(30, cx => { this.openPicker(cx); cx.notify(); });   // no board yet (⌘⇧B): pick one
     cx.spawn(async cx => {
       for (;;) {
         const c = await nextCommand();
@@ -154,13 +169,190 @@ export default class Draw extends View {
         else if (c === "write") this.ed.beginText(null, this.ed.toWorld({ x: this.size.w / 3, y: this.size.h / 3 }));   // start typing (no mouse needed)
         else if (c === "help") this.help = !this.help;
         else if (c === "demo") { if (this.board) this.endDemo(); else this.startDemo(); }
+        else if (c === "open") { if (this.picker) this.closePicker(cx); else this.openPicker(cx); }
         else if (c === "focus") { cx.timer.after(60, () => { if (panes().find(q => q.focused)?.mod === MOD) this.handle.focus(); }); continue; }
         this.after(cx);
       }
     });
   }
 
-  // On open, show the drawing at 100% (centered) unless it's too big, then zoom out to fit.
+  newEditor() { const ed = new Editor({ onOp: op => { if (!op.transient) this.dirty = true; } }); ed.setSize(this.size?.w ?? 900, this.size?.h ?? 600); return ed; }
+
+  startStore(cx) {
+    const store = this.store = new FileStore(this.file, this.ed, {
+      onError: m => { if (this.store === store) this.error = m; },
+      onExternal: n => { if (this.store === store) { this.error = null; this.flash = `${n} change${n === 1 ? "" : "s"} from the file`; } },
+    });
+    cx.spawn(async acx => { await store.start(acx); if (this.store !== store) return; this.fitted = false; this.maybeFit(); acx.notify(); });
+    this.remember(this.file);
+  }
+
+  // This pane moves to another board: the current one is saved first, then a fresh editor and store.
+  async switchBoard(file, cx) {
+    if (file === this.file && this.store) return;
+    if (this.board) this.endDemo();
+    if (this.ed.text) this.ed.commitText();
+    if (this.store) { if (this.dirty) { this.dirty = false; } await this.store.flush(cx); this.store.stop(); }
+    this.file = file; this.error = null; this.flash = null; this.ed = this.newEditor(); this.selKey = "";
+    try { localStorage.setItem("board", JSON.stringify({ props: this.propFile, file })); } catch {}
+    this.startStore(cx);
+    cx.notify();
+  }
+
+  // Newest first in recent.json, shared by every board pane.
+  remember(file) {
+    this.recent = pushRecent(this.recent, file);
+    const dir = `${appHome()}/herdr-draw`;
+    cx_free_write(dir, "recent.json", JSON.stringify(this.recent));
+  }
+
+  // ── board picker (⌘O, ⌘⇧B, or the board's name in the toolbar) ──────────
+
+  openPicker(cx) {
+    if (this.picker) return;
+    if (this.ed.text) this.ed.commitText();
+    this.help = false;
+    this.picker = { query: "", rows: [], sel: 0, top: 0 };
+    this.pickInput.set_value("");
+    this.rankPicker();
+    this.pickInput.focus();
+    cx.timer.after(30, () => { if (this.picker) this.pickInput.focus(); });   // not drawn yet: again after the frame
+    cx.spawn(async cx => {
+      this.recent = parseRecent(await readText(RECENT()).catch(() => null));
+      this.boardList = await this.listBoards();
+      if (this.picker) { this.rankPicker(true); cx.notify(); }
+    });
+  }
+  closePicker(cx) { this.picker = null; this.handle.focus(); cx?.notify?.(); }
+
+  // *.excalidraw files where boards live: ~/boards, this board's folder, the space's folder, the scratch board's.
+  async listBoards() {
+    const f = focused?.() ?? null;
+    const dirs = [...new Set([BOARDS_DIR(), this.file && folderOf(this.file), f?.cwd, `${appHome()}/herdr-draw`].filter(Boolean))];
+    // find itself, no shell: each folder on its own (a missing one just lists nothing).
+    let out = "";
+    for (const d of dirs) {
+      const r = await exec("find", [d, "-maxdepth", "4", "(", "-name", "node_modules", "-o", "-name", ".git", "-o", "-name", ".cache", "-o", "-name", "Library", "-o", "-name", ".Trash", ")", "-prune",
+        "-o", "-type", "f", "(", "-iname", "*.excalidraw", "-o", "-iname", "*.excalidraw.json", ")", "-exec", "stat", "-f", "%m %N", "{}", "+"]).catch(() => null);
+      out += (r?.stdout ?? "") + "\n";
+      if (out.length > 400000) break;   // enough boards for a picker
+    }
+    const seen = new Set();
+    return parseListing(out).filter(b => !seen.has(b.path) && seen.add(b.path));
+  }
+
+  rankPicker(keep = false) {
+    const p = this.picker; if (!p) return;
+    const was = p.rows[p.sel]?.path;
+    p.rows = rankBoards(p.query, this.boardList ?? [], this.recent, { home: home(), current: this.file });
+    const q = p.query.trim();
+    if (q && !p.rows.some(r => r.name.toLowerCase() === q.toLowerCase())) p.rows.push({ create: true, name: q, folder: tilde(BOARDS_DIR(), home()) });
+    const at = keep && was ? p.rows.findIndex(r => r.path === was) : -1;
+    this.pickSelect(at >= 0 ? at : 0);
+  }
+  pickSelect(i) {
+    const p = this.picker; if (!p) return;
+    p.sel = Math.max(0, Math.min(p.rows.length - 1, i));
+    if (p.sel < p.top) p.top = p.sel; else if (p.sel >= p.top + PICK_ROWS) p.top = p.sel - PICK_ROWS + 1;
+  }
+
+  pickOpen(cx) {
+    const row = this.picker?.rows[this.picker.sel];
+    if (!row) return;
+    if (row.create) return this.pickCreate(cx);
+    this.closePicker(cx);
+    cx.spawn(async cx => { await this.switchBoard(row.path, cx); this.after(cx); });
+  }
+  // A new board named as typed, in ~/boards (never over an existing file).
+  pickCreate(cx) {
+    const q = this.picker?.query.trim(); if (!q) return;
+    const taken = new Set((this.boardList ?? []).map(b => b.path));
+    const path = newBoardPath(BOARDS_DIR(), q, taken);
+    this.closePicker(cx);
+    cx.spawn(async cx => {
+      await exec("mkdir", ["-p", folderOf(path)]);
+      try { await writeText(path, JSON.stringify(emptyScene(), null, 2), null); }
+      catch (e) { this.error = `Can't make ${tilde(path, home())}: ${e?.message ?? e}`; cx.notify(); return; }
+      await this.switchBoard(path, cx);
+      this.flash = `new board: ${tilde(path, home())}`;
+      this.after(cx);
+    });
+  }
+
+  pickKeys(e, cx) {
+    const k = e.key, m = e.modifiers ?? {}, c = !!m.control, done = () => cx.stop_propagation();
+    if (k === "escape") { this.closePicker(cx); return done(); }
+    if (k === "enter") { if (m.platform || c) this.pickCreate(cx); else this.pickOpen(cx); return done(); }
+    if (k === "down" || (c && (k === "n" || k === "j"))) { this.pickSelect(this.picker.sel + 1); cx.notify(); return done(); }
+    if (k === "up" || (c && (k === "p" || k === "k"))) { this.pickSelect(this.picker.sel - 1); cx.notify(); return done(); }
+    if (k === "pagedown" || k === "pageup") { this.pickSelect(this.picker.sel + (k === "pagedown" ? 1 : -1) * (PICK_ROWS - 1)); cx.notify(); return done(); }
+    if ((m.platform || c) && k === "o") { this.closePicker(cx); return done(); }
+    if (!m.platform && !c) this.pickInput.focus();   // typing goes to the search, even after a click elsewhere
+  }
+
+  // A small drawing of a board (paths only), read once per file and size.
+  boardPreview(path, w, h, t) {
+    const key = `${path}|${w}|${h}`;
+    let pv = this.pv.get(key);
+    if (!pv) this.pv.set(key, pv = { layers: null, want: { path, w, h } });   // read after this frame (loadPreviews)
+    const body = div().relative().w(w).h(h).overflow_hidden().rounded(6).border(1).border_color(t.border).bg(withAlpha(this.palette().fg, 0.03));
+    if (!pv.layers) return body.flex().items_center().justify_center().child(div().text_size(11).text_color(t.dim).child("…"));
+    if (!pv.layers.length) return body.flex().items_center().justify_center().child(div().text_size(11).text_color(t.dim).child("empty board"));
+    return body.children(pv.layers.map(l => div().absolute().top(0).left(0).size_full().child(window.paint_path(l.b.build(), l.color))));
+  }
+
+  // Previews the picker asked for: read the board, draw its paths small, then redraw the pane.
+  async loadPreviews(cx) {
+    for (const pv of this.pv.values()) {
+      if (!pv.want) continue;
+      const { path, w, h } = pv.want; pv.want = null;
+      await readText(path).then(text => {
+        try {
+          const s = JSON.parse(text ?? "{}"), doc = new Doc({ elements: s.elements ?? [], files: {} }), pal = this.palette();
+          const box = paintedBox(doc, pal);
+          if (!box) { pv.layers = []; return; }
+          const pad = 8, k = Math.min(1, (w - pad * 2) / Math.max(1, box.w), (h - pad * 2) / Math.max(1, box.h));
+          const ox = (w - box.w * k) / 2, oy = (h - box.h * k) / 2;
+          pv.layers = batchPaths(paintScene(doc, { x: ox / k - box.x, y: oy / k - box.y, scale: k }, pal).filter(i => i.t === "path")).layers.filter(l => l.n && !l.img);
+        } catch { pv.layers = []; }
+      }).catch(() => { pv.layers = []; });
+      cx.notify();
+    }
+  }
+
+  pickerOverlay(t) {
+    const p = this.picker, rows = p.rows.slice(p.top, p.top + PICK_ROWS), wide = this.size.w >= 720;
+    const row = (r, i) => {
+      const idx = p.top + i, sel = idx === p.sel;
+      return h_flex().id(`pick-${idx}`).h(30).px(10).gap(8).items_center().rounded(6).cursor_pointer()
+        .bg(sel ? withAlpha(t.accent, 0.18) : CLEAR).hover(s => s.bg(sel ? withAlpha(t.accent, 0.18) : t.hover))
+        .on_click((_e, cx) => { this.pickSelect(idx); this.pickOpen(cx); })
+        .child(div().w(10).flex_shrink_0().text_size(9).text_color(r.create ? t.accent : r.recent ? t.accent : t.border).child(r.create ? "+" : r.recent ? "●" : ""))
+        .child(div().flex_shrink_0().text_size(13).text_color(t.foreground).when(sel, e => e.font_semibold()).child(r.create ? `New board “${r.name}”` : r.name))
+        .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(r.create ? `in ${r.folder}` : r.folder))
+        .when(!!r.current, e => e.child(div().text_size(10).text_color(t.dim).child("open here")));
+    };
+    const cur = p.rows[p.sel];
+    const list = v_flex().flex_1().min_w(0).gap(1)
+      .children(rows.map(row))
+      .when(!p.rows.length, e => e.child(div().px(10).py(8).text_size(12).text_color(t.dim).child(this.boardList ? "No boards yet: type a name to make one" : "Looking for boards…")));
+    return div().id("picker").absolute().top(0).left(0).size_full().bg(withAlpha(t.background, 0.82)).flex().justify_center().items_start().pt(40)
+      .on_mouse_down("left", (_e, cx) => { cx.stop_propagation(); this.closePicker(cx); })
+      .on_scroll_wheel((_e, cx) => cx.stop_propagation())
+      .child(v_flex().id("picker-card").w(wide ? 760 : Math.max(280, this.size.w - 32)).max_h_full().gap(10).p(14).rounded(10).border(1).border_color(t.border).bg(t.surface ?? t.background)
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .child(h_flex().gap(8).items_center()
+          .child(div().text_size(15).font_semibold().child("Boards"))
+          .child(div().flex_1())
+          .child(div().text_size(11).text_color(t.dim).child("↑↓ move · Enter open · ⌘Enter new · Esc close")))
+        .child(Input.new(this.pickInput).h(30).text_size(13))
+        .child(h_flex().gap(12).items_start()
+          .child(list)
+          .when(wide && !!cur && !cur.create, e => e.child(v_flex().gap(6).flex_shrink_0()
+            .child(this.boardPreview(cur.path, 300, 200, t))
+            .child(div().w(300).truncate().text_size(11).text_color(t.dim).child(tilde(cur.path, home())))))));
+  }
+
   maybeFit() { if (!this.fitted && this.measured && this.ed.doc.live().length) { this.fitted = true; this.ed.fit(); } }
 
   // The demo: a fresh Editor on core/demo.js's board, played at once. The person's editor (and its
@@ -232,6 +424,8 @@ export default class Draw extends View {
 
   keys(e, cx) {
     if (this.renaming) return;
+    if (this.picker) return this.pickKeys(e, cx);
+    if (!this.ed.text && (e.modifiers?.platform || e.modifiers?.control) && !e.modifiers?.shift && e.key === "o") { this.openPicker(cx); cx.stop_propagation(); return cx.notify(); }
     if (this.help) {   // the overlay takes every key: ? or Esc closes it, D plays the demo
       if (e.key === "d" && !e.modifiers?.platform) this.startDemo();
       else if (isHelpKey(e) || e.key === "escape" || e.key === "q") this.help = false;
@@ -373,7 +567,7 @@ export default class Draw extends View {
     const t = theme();
     this.ensureImages(cx);
     const showSide = this.sidebar && this.size.w > 360;
-    cx.spawn(async acx => { await this.drawRotated(acx); });   // after this frame: PNGs for rotated text that changed
+    cx.spawn(async acx => { await this.drawRotated(acx); await this.loadPreviews(acx); });   // after this frame: rotated text PNGs, picker previews
     return v_flex().id("draw").size_full().min_h(0).bg(t.background).text_color(t.foreground)
       .track_focus(this.handle).on_key_down((e, cx) => this.keys(e, cx))
       .child(this.toolbar(t))
@@ -410,7 +604,9 @@ export default class Draw extends View {
       .child(this.button(t, "zoom", div().text_size(11).text_color(t.muted).child(`${Math.round(ed.view.scale * 100)}%`), false, "Fit everything (⇧1)", () => ed.fit()))
       .child(this.button(t, "side", labelled("◧", "I", 13), this.sidebar, "Properties and layers (I)", () => { this.sidebar = !this.sidebar; }))
       .child(this.button(t, "help", div().text_size(13).font_semibold().child("?"), this.help, "Every shortcut, and a demo (?)", () => { this.help = !this.help; }))
-      .child(div().ml(4).text_size(12).text_color(t.muted).truncate().child(name));
+      .child(div().id("board-name").ml(4).px(6).h(24).rounded(5).flex().items_center().gap(4).cursor_pointer().hover(s => s.bg(t.hover)).tooltip("Switch board or make a new one (⌘O)")
+        .on_click((_e, cx) => { this.openPicker(cx); cx.notify(); })
+        .child(div().text_size(12).text_color(t.muted).truncate().child(this.file ? boardName(name) : "no board")).child(div().text_size(9).text_color(t.dim).child("▾")));
   }
 
   canvas(t) {
@@ -420,10 +616,12 @@ export default class Draw extends View {
     return this.canvasEvents(el)
       .children(layers.filter(l => l.n).map(l => l.img ? this.imageItem(l.img, t) : div().absolute().top(0).left(0).size_full().child(window.paint_path(l.b.build(), l.color))))
       .children(texts.map(it => this.textItem(it, t)))
-      .when(!this.ed.doc.live().length && !this.error, e => e.child(this.emptyHint(t)))
+      .when(!!this.file && !this.ed.doc.live().length && !this.error, e => e.child(this.emptyHint(t)))
       .when(!!this.ed.text, e => e.child(this.textInput(t)))
       .when(!!this.board, e => e.child(this.demoBar(t)))
-      .when(this.help, e => e.child(this.helpOverlay(t)));
+      .when(this.help, e => e.child(this.helpOverlay(t)))
+      .when(!!this.picker, e => e.child(this.pickerOverlay(t)))
+      .when(!this.file && !this.picker, e => e.child(this.noBoard(t)));
   }
 
   // ── library ──────────────────────────────────────────────────────────
@@ -558,6 +756,13 @@ export default class Draw extends View {
         .child(h_flex().gap(8).mt(6)
           .child(this.chip(t, "hint-help", "?  every shortcut", false, "Every shortcut (?)", () => { this.help = true; }, 120))
           .child(this.chip(t, "hint-demo", "▶  play the demo", false, "A short animated tour (not saved)", () => this.startDemo(), 120))));
+  }
+
+  noBoard(t) {
+    return div().absolute().top(0).left(0).size_full().flex().items_center().justify_center()
+      .child(v_flex().items_center().gap(8).text_color(t.dim).text_size(13)
+        .child(div().text_size(16).text_color(t.muted).child("No board open"))
+        .child(this.chip(t, "nb-pick", "open or make a board  ⌘O", false, "Pick a board (⌘O)", cx => this.openPicker(cx), 180)));
   }
 
   // Over the canvas while the demo plays: what this is, and the way back.
