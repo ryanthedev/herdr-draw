@@ -57,6 +57,14 @@ Set up 2026-11-08 so the person can test and give feedback:
 - Not verified live: hover/drag hints and cursors (no input reaches the test window); headless tests and shots cover them.
 - Open: a port facing away from the other end looks different in excalidraw.com (it treats fixedPoint as an aim point).
 
+## Rotated text (2026-11-08, fourth session; the person "tried to rotate text and it didn't work")
+
+Rotated text and labels of rotated shapes now show turned in the pane (sips PNG per item, see CLAUDE.md). Verified live
+(label at -20°, hand text at 30°, two mono lines at -90°). Left: rotated mono text falls back to sans in that picture
+when sips can't find the terminal font; images still stay upright in the pane (`sips -r` would be the same trick).
+iPad: no native path yet. Heel (~/repos/herdr-mobile, iPhone) lists herdr-draw editing as a goal but draws no boards;
+boards open in excalidraw.com in Safari; a canvas adapter on core (touch → pointer ports) is the route to native.
+
 ## How to verify in real Herdr (never the person's window)
 
 Isolated home `~/.cache/hdt` already exists (layout `drawtest` shows only the board, file `~/.cache/hdt/t.excalidraw`):

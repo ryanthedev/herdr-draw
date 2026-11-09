@@ -39,6 +39,11 @@ const cursorStyle = (el, name) => (CURSORS[name] && typeof el[CURSORS[name]] ===
 // and a dev sync's rsync --delete doesn't wipe it).
 const IMG_REL = ".cache/herdr-draw/img";
 const IMG_DIR = () => `${appHome()}/${IMG_REL}`;
+// Rotated text: GPUI can't turn text, so sips draws each rotated text item as a transparent PNG here,
+// named by a hash of its SVG (GPUI caches images by path, so a changed picture gets a new name).
+const TXT_REL = ".cache/herdr-draw/txt";
+const TXT_DIR = () => `${appHome()}/${TXT_REL}`;
+const fnv = str => { let h = 0x811c9dc5; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); } return (h >>> 0).toString(16).padStart(8, "0") + str.length.toString(16); };
 const MIME_EXT = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp", "image/svg+xml": "svg" };
 const IMAGE_FILE = /\.(png|jpe?g|gif|webp|svg|heic|heif|tiff?|bmp)$/i;
 
@@ -111,6 +116,8 @@ export default class Draw extends View {
     this.board = null;      // while the demo plays: the person's own editor, kept aside (the demo is never saved)
     this.tick = null; this.size = { w: 900, h: 600 }; this.measured = false;   // a default size so panels render before layout this.textOpen = false; this.renaming = null;
     this.handle = cx.focus_handle();
+    this.rtext = new Map();  // rotated text: element id → { key, path, want: { key, svg }, busy }
+    exec("sh", ["-c", 'rm -rf "$1" && mkdir -p "$1"', "txt-reset", TXT_DIR()]);   // regenerated on demand: no stale pile
     this.imgs = new Map();   // file id → cache path (relative to the app home) once decoded; "pending" / "failed"
     // Multi-line: a submit with ⌘ (or any submit, if Enter submits) commits; Escape or a click outside commits too.
     this.input = TextareaState.new({ value: "", placeholder: "Type… (Esc or ⌘⏎ to finish)", rows: 1 });
@@ -366,6 +373,7 @@ export default class Draw extends View {
     const t = theme();
     this.ensureImages(cx);
     const showSide = this.sidebar && this.size.w > 360;
+    cx.spawn(async acx => { await this.drawRotated(acx); });   // after this frame: PNGs for rotated text that changed
     return v_flex().id("draw").size_full().min_h(0).bg(t.background).text_color(t.foreground)
       .track_focus(this.handle).on_key_down((e, cx) => this.keys(e, cx))
       .child(this.toolbar(t))
@@ -484,9 +492,48 @@ export default class Draw extends View {
       .child(div().text_size(11).text_color(t.dim).child(path === "failed" ? "image unavailable" : "loading image…"));
   }
 
+  // A rotated text item as a picture: the item moved into a square around its center, drawn by
+  // toSvg (rotation, escaping, one font per class for sips) at 2 × the pane's zoom. Until its PNG
+  // exists, the previous one (mid-rotation) or the upright text stands in.
+  rotatedItem(it, text, t) {
+    const lines = text.split("\n"), lh = it.size * (it.lineHeight ?? 1.25);
+    const w = it.box ? it.box.w : Math.max(...lines.map(l => l.length)) * it.size * 0.75 + it.size, h = it.box ? it.box.h : lines.length * lh + it.size * 0.5;
+    const x0 = it.box ? it.box.x : it.x, y0 = it.box ? it.box.y : it.y;
+    const R = Math.ceil(Math.hypot(Math.max(Math.abs(x0 - it.cx), Math.abs(x0 + w - it.cx)), Math.max(Math.abs(y0 - it.cy), Math.abs(y0 + h - it.cy))) + it.size * 0.5);
+    const ox = it.cx - R, oy = it.cy - R, deg = Math.round(it.angle * 180 / Math.PI);   // whole degrees: a drag doesn't make hundreds of PNGs
+    const local = { ...it, text, angle: deg * Math.PI / 180, x: it.x - ox, y: it.y - oy, cx: R, cy: R, box: it.box && { ...it.box, x: it.box.x - ox, y: it.box.y - oy }, color: it.color ?? t.foreground, reveal: undefined };
+    const faces = { ...RASTER_FACES, hand: this.face("hand") ?? RASTER_FACES.hand, mono: this.face("mono") ?? RASTER_FACES.mono };
+    const svg = toSvg([local], { width: 2 * R, height: 2 * R, scale: 2 * Z(), svgImages: false, faces });
+    const key = fnv(svg), e = this.rtext.get(it.id) ?? {};
+    if (e.key !== key) { e.want = { key, svg }; this.rtext.set(it.id, e); }
+    if (!e.path) return null;
+    return div().absolute().left(ox).top(oy).w(2 * R).h(2 * R).child(image(e.path).size_full());
+  }
+
+  // Draw the PNGs rotated text wants, one job per element at a time; the newest wish wins.
+  async drawRotated(cx) {
+    for (const [id, e] of this.rtext) {
+      if (e.busy || !e.want || e.want.key === e.key) continue;
+      e.busy = true;
+      try {
+        while (e.want && e.want.key !== e.key) {
+          const { key, svg } = e.want, rel = `${TXT_REL}/${key}.png`, tmp = `${TXT_DIR()}/${key}.svg`;
+          await writeText(tmp, svg, null);
+          const r = await exec("sh", ["-c", 'mkdir -p "$(dirname "$2")"; [ -s "$2" ] || sips -s format png "$1" --out "$2" >/dev/null 2>&1; s=$?; rm -f "$1"; exit $s', "txt-raster", tmp, `${appHome()}/${rel}`]);
+          if (r.code !== 0) { e.want = null; break; }   // stays upright rather than retrying every frame
+          e.key = key; e.path = rel;
+          cx.notify();
+        }
+      } finally { e.busy = false; }
+    }
+    // Forget elements that are gone or upright again.
+    for (const id of this.rtext.keys()) { const el = this.ed.doc.get(id) ?? this.ed.doc.get(id.split(":")[0]); if (!el) this.rtext.delete(id); }
+  }
+
   textItem(it, t) {
     let text = String(it.text ?? "");
     if (it.reveal != null && it.reveal < 1) text = text.slice(0, Math.round(text.length * it.reveal));   // typewriter
+    if (it.angle && Math.abs(it.angle) > 0.001) { const pic = this.rotatedItem(it, text, t); if (pic) return pic; }
     const face = this.face(it.font);
     const lines = v_flex().when(!!face, e => e.font_family(face)).text_size(it.size).line_height(it.lineHeight ?? 1.25).text_color(withAlpha(it.color ?? t.foreground, it.opacity ?? 1))
       .children(text.split("\n").map(l => div().whitespace_nowrap().child(l || " ")));

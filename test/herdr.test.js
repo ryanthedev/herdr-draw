@@ -471,3 +471,26 @@ test("the canvas cursor follows the editor: crosshair to draw, pointer on a conn
   ui.view.ed.setTool("hand");
   expect(ui.canvas().style.cursor_grab).toBe(true);
 });
+
+test("rotated text shows turned: sips draws it as a picture, upright text needs none", async () => {
+  calls.real = (cmd, args) => cmd === "sh" && ["txt-raster", "txt-reset"].includes(args[2]);
+  const ui = await open();
+  await ui.cx.flush();
+  const before = calls.exec.length;
+  ui.click("tool-text"); ui.on("on_mouse_down:left", ui.ev(200, 200)); ui.on("on_mouse_up:left", ui.ev(200, 200));
+  ui.input().type("Turned"); ui.input().submit();
+  const id = [...ui.view.ed.sel][0] ?? ui.view.ed.doc.live().filter(e => e.type === "text").at(-1).id;
+  ui.tree(); await ui.cx.flush();
+  expect(calls.exec.slice(before).some(c => c[3] === "txt-raster")).toBe(false);          // upright: plain text
+  ui.view.ed.select([id]); ui.view.ed.rotateBy(30);
+  ui.tree(); await ui.cx.flush(); ui.tree(); await ui.cx.flush();
+  const job = calls.exec.slice(before).find(c => c[3] === "txt-raster");
+  expect(job).toBeTruthy();
+  expect(existsSync(job[4])).toBe(false);                                                  // the SVG is gone after sips
+  const png = readFileSync(job[5]);
+  expect(png.subarray(1, 4).toString()).toBe("PNG");
+  const pic = find(ui.canvas(), n => n.kind === "image" && String(n.path).includes(".cache/herdr-draw/txt/"));
+  expect(pic).toBeTruthy();                                                                   // drawn as the picture, not upright text
+  expect(textOf(ui.canvas())).not.toContain("Turned");
+  calls.real = null;
+}, 20000);

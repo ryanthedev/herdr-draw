@@ -82,7 +82,11 @@ sent only to that window's id; quit it by its pid when done.
 - Text is drawn as divs above all paths (no text-in-path API), so text always paints over shapes.
 - Text widths come from glyph tables in `core/text.js` (SF Pro as the pane spaces it, Chalkboard SE, mono 0.6), made by
   `scripts/glyph-widths.mjs`. Never use a flat chars × factor estimate elsewhere: call `textWidth`/`lineWidth`.
-- Rotation: shapes and text keep `angle`; lines, arrows and pen strokes bake it into their points. Herdr can't rotate text, so text stays upright in the pane (SVG export rotates it).
+- Rotation: shapes and text keep `angle`; lines, arrows and pen strokes bake it into their points. GPUI can't rotate text,
+  so the pane draws each rotated text item as a transparent PNG: `toSvg` of that one item → sips (~10 ms) into
+  `<appHome>/.cache/herdr-draw/txt/<hash of the SVG>.png` (new name per change: GPUI caches by path; angle in whole degrees),
+  shown with `image()`; the upright text stands in until it lands. The folder is cleared when a pane opens.
+  sips may not find the terminal font a mono face names, and falls back to sans. Images still can't rotate in the pane.
 - Elbow arrows (`elbowed: true`) are routed from their ends every revision (cached per arrow per `doc.rev`) and baked into
   `points` by `settle`, with Excalidraw's `binding.fixedPoint` (without it excalidraw.com pins elbow ends to shape centers).
   We choose sides ourselves and never read `fixedPoint` back.
