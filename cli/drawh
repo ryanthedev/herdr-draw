@@ -3,6 +3,8 @@
 
 The board is an .excalidraw file; the pane watches it and redraws on every change.
 Coordinates are scene pixels, x right, y down. Shapes are 140x80 unless --w/--h.
+Needs node (or bun) on PATH: every write of a board with labels or arrows runs the board's own core
+(arrow routes, label boxes) so the file opens right without the pane, and in excalidraw.com (~0.2 s).
 
   drawh open FILE [--down]                      open FILE in a pane beside the focused one (creates it)
   drawh ls FILE [--json]                        list elements: id, type, box, label, arrow ends

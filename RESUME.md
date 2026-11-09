@@ -5,7 +5,7 @@ For the next session picking this up. Read `CLAUDE.md` first (architecture, port
 ## Where it stands
 
 - All work is committed locally on `main` and **not pushed** (no remote yet). Latest: library (see `git log`).
-- `bun test`: 123 tests, all passing. Snapshots in `test/out/*.png`.
+- `bun test`: 124 tests, all passing. Snapshots in `test/out/*.png`.
 - Installed into `~/.config/herdr-app/mods/herdr-draw` (via `scripts/dev-sync.sh`); `drawh` is on PATH (`~/.local/bin/drawh` → the installed copy).
 
 Built so far (commit order):
@@ -20,13 +20,14 @@ Built so far (commit order):
    aspect-locked resize (shift frees), copy/paste with files, SVG export embeds them. Board I/O now handles files over 1 MiB
    (`adapters/herdr/io.js`): Herdr's `readTextFile` caps at 1 MiB, which photo boards pass at once.
 
-## Main Herdr window (updated by the first session, standing down)
+## Main Herdr window (the person's): installed build is behind
 
-Resolved: the person restarted Herdr; `herdr-app status` shows `errors: []`. The first session installed `f49bbe1` into
-`~/.config/herdr-app/mods/herdr-draw` (90 tests passing) and confirmed by screenshot that the board pane (pane id
-`pbfe66935efb0ec6f908de961d69de923`, in the herdr-md tab) loads it. Later commits (`30febc0` and on) are not installed yet:
-run `scripts/dev-sync.sh` from a clean tree. `herdr-app ls` doesn't list mod panes; `herdr-app do pane.focus {"pane": ID}` shows
-one without key presses (put the person's focus back afterwards).
+`~/.config/herdr-app/mods/herdr-draw` holds the library build (matches `bff4afc`), checked 2026-11-08 by comparing files.
+Everything after it (elbow fixedPoints, label boxes, arrow labels in copy/library, and this session's later work) is **not
+installed**: sessions don't touch the person's window. To install: from a clean tree, `env -u HERDR_APP_HOME sh scripts/dev-sync.sh`
+(a Claude shell here may have `HERDR_APP_HOME=~/.cache/hdt`, which would install into the test home instead), then reopen the
+board pane (a rebuilt mod can fail to reload in place; see CLAUDE.md). The board pane's id is in
+`~/.local/state/herdr-core/default/docs.json` (`herdr-app ls` lists terminals only).
 
 ## How to verify in real Herdr (never the person's window)
 
@@ -73,7 +74,8 @@ Window `31533` / `~/.cache/eht` belongs to the engram agent: leave it alone.
    shape's unrotated box; 0.5 → 0.5001 like excalidraw.com). Without it excalidraw.com pinned elbow ends to shape centers and
    looped when a shape moved. `drawh` now bakes elbow routes on every save (core `settle` through node). **Verified in
    excalidraw.com** with a headless-Chromium probe (see "excalidraw.com probe" below): load and drag keep clean routes.
-   We still pick sides automatically (we don't read fixedPoint back as a side lock). Cost: dragging a hub with 100 elbows
+   We still pick sides automatically (we don't read fixedPoint back as a side lock). Rotated shapes: the elbow leaves the
+   rotated box's bounding box, not its outline (same in the pane); excalidraw.com keeps it there and re-routes without loops. Cost: dragging a hub with 100 elbows
    is ~4.4 ms/frame headless (10: 0.5 ms), so no work needed.
    Found on the way, fixed: excalidraw.com paints labels from their stored x/y/width/height, which we never kept (drawh labels
    sat top-left, Mermaid labels had width 0 and were invisible). `fileScene()` (core/geometry.js) now writes the derived label

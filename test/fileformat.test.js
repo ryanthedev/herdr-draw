@@ -87,3 +87,10 @@ test("copy and duplicate take an arrow's label along", () => {
   t.ed.cloneSelection(20, 20);
   expect(t.live().filter(e => e.type === "text" && e.text === "next")).toHaveLength(2);
 });
+
+test("reading back our own derived label boxes changes nothing (no \"+N from file\")", () => {
+  const t = setup();
+  t.ed.paste("graph LR\n  A[Start] -->|next| B[Stop]", { x: 400, y: 300 });
+  t.drag([0, 0], [1, 1]);   // the labels' stored boxes are now stale in memory
+  expect(t.ed.receive({ elements: t.ed.scene().elements })).toEqual([]);
+});
