@@ -5,7 +5,7 @@ For the next session picking this up. Read `CLAUDE.md` first (architecture, port
 ## Where it stands
 
 - All work is committed locally on `main` and **not pushed** (no remote yet). Latest: library (see `git log`).
-- `bun test`: 113 tests, all passing. Snapshots in `test/out/*.png`.
+- `bun test`: 121 tests, all passing. Snapshots in `test/out/*.png`.
 - Installed into `~/.config/herdr-app/mods/herdr-draw` (via `scripts/dev-sync.sh`); `drawh` is on PATH (`~/.local/bin/drawh` → the installed copy).
 
 Built so far (commit order):
@@ -72,6 +72,19 @@ Window `31533` / `~/.cache/eht` belongs to the engram agent: leave it alone.
    excalidraw.com** with a headless-Chromium probe (see "excalidraw.com probe" below): load and drag keep clean routes.
    We still pick sides automatically (we don't read fixedPoint back as a side lock). Cost: dragging a hub with 100 elbows
    is ~4.4 ms/frame headless (10: 0.5 ms), so no work needed.
+   Found on the way, fixed: excalidraw.com paints labels from their stored x/y/width/height, which we never kept (drawh labels
+   sat top-left, Mermaid labels had width 0 and were invisible). `fileScene()` (core/geometry.js) now writes the derived label
+   box on every save (pane and drawh), with no new versions. drawh settles every bound arrow on save (ends on outlines, not
+   centers; ~0.19 s per drawh call, node startup), and `drawh arrow --label` makes a bound arrow label. Verified live in the
+   isolated Herdr (drawh move re-routes the open pane's elbow; labels ride their arrows).
+   Left: excalidraw.com puts an arrow label at the route's middle *point* (the bend on a 3-point elbow); we put it halfway
+   along the length. Our wrapped label `text` stays unwrapped (excalidraw.com re-wraps from `originalText`).
+
+## excalidraw.com probe
+
+`node scripts/excalidraw-probe.mjs BOARD OUT.png [ID]` drops a board onto excalidraw.com in headless Chromium (local only:
+excalidraw.com keeps it in the page's localStorage), prints the arrows as it restored them, screenshots, and with an ID first
+drags that element down 150 px. Use it for any "does it open right in excalidraw.com" question.
 5. **Text measuring**: wrapping uses an estimated glyph width (`core/text.js` `CHAR_W`); hand and mono fonts wrap a bit off.
 6. Networking (deferred by the person): another `onOp` / `receive` pair; presence already renders from `editor.peers`.
 
