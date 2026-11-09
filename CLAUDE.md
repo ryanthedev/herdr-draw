@@ -33,7 +33,7 @@ Herdr-draw data lives where Excalidraw keeps foreign data: `customData.{layer,z,
 
 ## Dev loop
 
-- `bun test` (124 tests). `drawh mermaid` runs core/mermaid.js through node (or bun), so agents and the pane lay out alike. Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
+- `bun test` (129 tests). `drawh mermaid` runs core/mermaid.js through node (or bun), so agents and the pane lay out alike. Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
 - `scripts/dev-sync.sh` builds `build/herdr-draw` (adapter + core + svg + drawh) and installs a **copy** into `~/.config/herdr-app/mods/herdr-draw`.
 - See the real window only with `herdr-app shot` (passive). **Never drive the person's mouse or keyboard** to test (theGrid input tools land in whatever app is focused).
 
@@ -74,6 +74,8 @@ sent only to that window's id; quit it by its pid when done.
 - `"transparent"` is not a GPUI color: use `#00000000`.
 - Coordinates: GPUI event positions are zoomed px; divide by `settings().zoom`. Paths and `left/top` use the same zoom-1 units.
 - Text is drawn as divs above all paths (no text-in-path API), so text always paints over shapes.
+- Text widths come from glyph tables in `core/text.js` (SF Pro as the pane spaces it, Chalkboard SE, mono 0.6), made by
+  `scripts/glyph-widths.mjs`. Never use a flat chars × factor estimate elsewhere: call `textWidth`/`lineWidth`.
 - Rotation: shapes and text keep `angle`; lines, arrows and pen strokes bake it into their points. Herdr can't rotate text, so text stays upright in the pane (SVG export rotates it).
 - Elbow arrows (`elbowed: true`) are routed from their ends every revision (cached per arrow per `doc.rev`) and baked into
   `points` by `settle`, with Excalidraw's `binding.fixedPoint` (without it excalidraw.com pins elbow ends to shape centers).

@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { Editor } from "../core/editor.js";
 import { alongPath, resolvedPoints } from "../core/geometry.js";
 import { setup } from "./harness/fixture.js";
+import { labelHostHeight } from "../core/text.js";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const drawh = (...a) => { const r = Bun.spawnSync([`${ROOT}cli/drawh`, ...a]); if (r.exitCode) throw new Error(r.stderr.toString()); return r.stdout.toString().trim(); };
@@ -93,4 +94,17 @@ test("reading back our own derived label boxes changes nothing (no \"+N from fil
   t.ed.paste("graph LR\n  A[Start] -->|next| B[Stop]", { x: 400, y: 300 });
   t.drag([0, 0], [1, 1]);   // the labels' stored boxes are now stale in memory
   expect(t.ed.receive({ elements: t.ed.scene().elements })).toEqual([]);
+});
+
+test("drawh grows a shape to fit its label, as the pane does when a person types one", () => {
+  const f = `${mkdtempSync(`${tmpdir()}/drawh-`)}/b.excalidraw`;
+  drawh("add", f, "rect", "--at", "0,0", "--w", "200", "--h", "60", "--id", "A", "--label", "Validate the incoming webhook payload against the schema");
+  drawh("add", f, "rect", "--at", "300,0", "--w", "200", "--h", "60", "--id", "B", "--label", "ok");
+  drawh("label", f, "B", "A much longer label than the box was made for");
+  const s = JSON.parse(readFileSync(f, "utf8"));
+  for (const id of ["A", "B"]) {
+    const host = s.elements.find(e => e.id === id), label = s.elements.find(e => e.containerId === id);
+    expect(host.height).toBeCloseTo(labelHostHeight(label, host), 6);
+    expect(host.height).toBeGreaterThan(60);
+  }
 });

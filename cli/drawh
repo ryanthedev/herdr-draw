@@ -288,20 +288,24 @@ def load(path):
 
 def settle_for_file(scene):
     """Bake what the pane derives, with the board's own code (core/geometry.js), so the file opens right
-    without the pane and in excalidraw.com: bound arrows' ends on the outlines, elbow routes and their
-    fixedPoints (new versions), and
+    without the pane and in excalidraw.com: shapes grown to fit their labels, bound arrows' ends on the
+    outlines, elbow routes and their fixedPoints (new versions), and
     label boxes (centered in their shape or on their arrow; derived, so no new versions)."""
     if not any(not e.get("isDeleted") and (e.get("elbowed") or e.get("containerId") or e.get("startBinding") or e.get("endBinding")) for e in scene["elements"]):
         return
     url = lambda m: json.dumps("file://" + os.path.join(core_dir(), m))
-    script = ("import { Doc } from %s; import { settle, fileScene } from %s; import { touch } from %s;"
+    script = ("import { Doc } from %s; import { settle, fileScene } from %s; import { touch, isShape } from %s; import { labelHostHeight } from %s;"
               "let s = ''; process.stdin.on('data', d => s += d); process.stdin.on('end', () => {"
               " const doc = new Doc(JSON.parse(s)), out = {};"
+              # shapes grow down to fit their labels (the pane's fitHost), before arrows are routed to them
+              " for (const el of doc.live()) { const l = isShape(el) && doc.labelOf(el); if (!l || !l.text) continue;"
+              "  const need = labelHostHeight(l, el); if (Math.abs(el.height) >= need) continue;"
+              "  const c = structuredClone(el); c.height = need; touch(c); doc.apply({ elements: [c] }, { force: true }); out[c.id] = c; }"
               " for (const el of doc.live()) if (el.elbowed || el.startBinding || el.endBinding) { const c = structuredClone(el);"
               "  if (settle(doc, c)) { touch(c); doc.apply({ elements: [c] }, { force: true }); out[c.id] = c; } }"
               " const before = new Map(doc.toScene().elements.map(e => [e.id, e]));"
               " for (const e of fileScene(doc, doc.toScene()).elements) if (e !== before.get(e.id)) out[e.id] = e;"
-              " process.stdout.write(JSON.stringify(out)); });") % (url("doc.js"), url("geometry.js"), url("model.js"))
+              " process.stdout.write(JSON.stringify(out)); });") % (url("doc.js"), url("geometry.js"), url("model.js"), url("text.js"))
     done = json.loads(run_js(script, json.dumps(scene)))
     scene["elements"] = [done.get(e["id"], e) for e in scene["elements"]]
 
