@@ -24,14 +24,19 @@ Built so far (commit order):
     grows shapes), arrow labels travel with copy/duplicate/library, per-glyph text widths for the pane's fonts, boards over
     8 MiB open. Checked against the real excalidraw.com with `scripts/excalidraw-probe.mjs` and live in the isolated Herdr.
 
-## Main Herdr window (the person's): installed build is behind
+## Main Herdr window (the person's): installed for testing
 
-`~/.config/herdr-app/mods/herdr-draw` holds the library build (matches `bff4afc`), checked 2026-11-08 by comparing files.
-Everything after it (elbow fixedPoints, label boxes, arrow labels in copy/library, and this session's later work) is **not
-installed**: sessions don't touch the person's window. To install: from a clean tree, `env -u HERDR_APP_HOME sh scripts/dev-sync.sh`
-(a Claude shell here may have `HERDR_APP_HOME=~/.cache/hdt`, which would install into the test home instead), then reopen the
-board pane (a rebuilt mod can fail to reload in place; see CLAUDE.md). The board pane's id is in
-`~/.local/state/herdr-core/default/docs.json` (`herdr-app ls` lists terminals only).
+Set up 2026-11-08 so the person can test and give feedback:
+- `scripts/install.sh` builds **HEAD** (via `git archive`, so uncommitted edits never ship) and installs into
+  `~/.config/herdr-app/mods/herdr-draw` whatever `HERDR_APP_HOME` says, plus the `drawh` link in `~/.local/bin`.
+  Run it after each commit the person should get.
+- Optional auto-update: `sh scripts/install-hook.sh` adds a post-commit hook that runs install.sh on every commit to `main`
+  (log in `build/install.log`; undo: `rm .git/hooks/post-commit`). Only the person installs it (an auto-mode check
+  blocked Claude from adding it). Check `ls .git/hooks/post-commit` to know whether it's on.
+- Global key **⌘⇧B** (in the person's `~/.config/herdr-app/keys.json`, backup `keys.json.bak-20261108-draw`) splits the
+  focused pane right with a board on `~/.config/herdr-app/herdr-draw/scratch.excalidraw`.
+- An open board pane may keep the old build after an update (see CLAUDE.md): close it and press ⌘⇧B again.
+- Feedback from the person goes in `FEEDBACK.md` (read it first next session).
 
 ## How to verify in real Herdr (never the person's window)
 
