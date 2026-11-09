@@ -67,6 +67,11 @@ export const SHORTCUTS = [
     ["⌘⇧E", "Export the board as SVG + PNG"],
     ["drop", "Images and .excalidrawlib libraries"],
   ]],
+  ["Frames as pages", [
+    ["F", "Draw a frame: one page of the board", ["f", {}]],
+    ["PgDn  PgUp", "Next, previous frame, filling the view", ["pagedown", {}, "frames"]],
+    ["side panel", "Frames: click one to go there"],
+  ]],
   ["Boards", [
     ["⌘O", "Switch this pane to another board, or make one"],
     ["board name", "Click it in the toolbar: the same"],

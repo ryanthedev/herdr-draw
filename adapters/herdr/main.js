@@ -821,6 +821,7 @@ export default class Draw extends View {
     return v_flex().id("draw-side").w(SIDEBAR).h_full().flex_shrink_0().border_l(1).border_color(t.border).bg(t.surface ?? t.background).overflow_y_scroll()
       .child(this.properties(t))
       .child(this.arrange(t))
+      .child(this.framesPanel(t))
       .child(this.animatePanel(t))
       .child(this.layersPanel(t))
       .child(this.libraryPanel(t));
@@ -904,6 +905,23 @@ export default class Draw extends View {
         .child(this.chip(t, "r90", "⟳ 90°", false, "Rotate 90°", () => ed.rotateBy(90), 44))
         .child(this.chip(t, "r0", "0°", false, "Reset rotation", () => ed.resetRotation(), 30)));
     return this.section(t, "Arrange", body);
+  }
+
+  // Frames as pages: each frame in reading order; a click shows it, PgDn/PgUp step through them.
+  framesPanel(t) {
+    const ed = this.ed, fs = ed.frames();
+    if (!fs.length) return div();
+    const rows = fs.map((f, i) => h_flex().id(`fr-${f.id}`).w_full().h(26).px(6).gap(6).items_center().rounded(5).cursor_pointer()
+      .bg(ed.frameAt === f.id ? withAlpha(t.accent, 0.16) : CLEAR).hover(s => s.bg(t.hover))
+      .on_click((_e, cx) => { ed.goToFrame(f.id); this.handle.focus(); this.after(cx); })
+      .child(div().w(16).text_size(10).text_color(t.dim).child(String(i + 1)))
+      .child(div().flex_1().truncate().text_size(12).child(f.name || "Frame")));
+    const body = v_flex().gap(2).children(rows)
+      .child(h_flex().gap(4).mt(4)
+        .child(this.chip(t, "fr-prev", this.keyed(t, "‹ prev", "PgUp"), false, "Previous frame (PgUp)", () => ed.stepFrame(-1), 60))
+        .child(this.chip(t, "fr-next", this.keyed(t, "next ›", "PgDn"), false, "Next frame (PgDn)", () => ed.stepFrame(1), 60))
+        .child(this.chip(t, "fr-all", "all", false, "Fit everything (⇧1)", () => ed.fit(), 34)));
+    return this.section(t, `Frames · ${fs.length}`, body);
   }
 
   animatePanel(t) {

@@ -255,3 +255,18 @@ test("snapshot: a small diagram renders (written to test/out)", async () => {
   expect(svg).toContain("Browser");
   expect(t.ed.sel.size).toBeGreaterThanOrEqual(5);
 });
+
+test("frames as pages: PgDn/PgUp step through frames in reading order and wrap", () => {
+  const t = setup();
+  t.key("f"); t.drag([400, 300], [600, 450]);   // bottom row
+  t.key("f"); t.drag([400, 50], [600, 200]);    // top row, right
+  t.key("f"); t.drag([50, 60], [250, 210]);     // top row, left (within 40 px of the row)
+  t.key("escape");
+  const order = t.ed.frames().map(f => [Math.round(f.x), Math.round(f.y)]);
+  expect(order).toEqual([[50, 60], [400, 50], [400, 300]]);
+  t.key("pagedown"); expect(t.ed.frameAt).toBe(t.ed.frames()[0].id);
+  t.key("pagedown"); t.key("pagedown"); expect(t.ed.frameAt).toBe(t.ed.frames()[2].id);
+  t.key("pagedown"); expect(t.ed.frameAt).toBe(t.ed.frames()[0].id);       // wraps
+  t.key("pageup"); expect(t.ed.frameAt).toBe(t.ed.frames()[2].id);
+  expect(t.ed.flash).toContain("3 of 3");
+});

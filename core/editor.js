@@ -1075,6 +1075,28 @@ export class Editor {
     this.changed();
   }
 
+  // ── frames as pages ────────────────────────────────────────────────────
+
+  // The board's frames in reading order: rows top to bottom, left to right within a row.
+  frames() {
+    return this.doc.visible().filter(e => e.type === "frame")
+      .sort((a, b) => (Math.abs(a.y - b.y) < 40 ? a.x - b.x : a.y - b.y));
+  }
+  // Show one frame filling the view (it becomes the current page).
+  goToFrame(id) {
+    const fs = this.frames(), i = fs.findIndex(f => f.id === id); if (i < 0) return;
+    this.frameAt = id; this.fit([fs[i]], 24);
+    this.flash = `${fs[i].name || "Frame"} · ${i + 1} of ${fs.length}`;
+  }
+  // The next (step 1) or previous (-1) frame after the current one, wrapping around.
+  stepFrame(step) {
+    const fs = this.frames();
+    if (!fs.length) { this.flash = "no frames yet: F draws one, then they're pages"; return this.changed(); }
+    const i = fs.findIndex(f => f.id === this.frameAt);
+    const next = i < 0 ? (step > 0 ? 0 : fs.length - 1) : (i + step + fs.length) % fs.length;
+    this.goToFrame(fs[next].id);
+  }
+
   // ── keys ───────────────────────────────────────────────────────────────
 
   // `key` as GPUI names it ("a", "backspace", "left", "[", ...); m = { shift, alt, cmd, ctrl }.
@@ -1128,6 +1150,8 @@ export class Editor {
       case "]": this.reorder("forward"); return true;
       case "[": this.reorder("backward"); return true;
       case "space": if (!m.shift) return false; this.playToggle(); return true;   // shift-space plays the timeline
+      case "pagedown": this.stepFrame(1); return true;   // frames as pages
+      case "pageup": this.stepFrame(-1); return true;
       case "=": this.setStyle({ fontSize: Math.min(96, (this.selectedFont() ?? this.style.fontSize) + 4) }); return true;
       case "-": this.setStyle({ fontSize: Math.max(8, (this.selectedFont() ?? this.style.fontSize) - 4) }); return true;
     }

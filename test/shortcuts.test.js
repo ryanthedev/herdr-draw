@@ -20,6 +20,7 @@ function prepared(kind) {
   if (kind === "sel2" || kind === "sel3") t.ed.select(t.byType("rectangle").map(e => e.id));
   if (kind === "redo") t.key("z", { cmd: true });
   if (kind === "hand") t.key("h");
+  if (kind === "frames") { t.key("f"); t.drag([50, 50], [300, 250]); t.key("f"); t.drag([400, 50], [700, 250]); t.key("escape"); }
   if (boxes) t.key("v");
   return t;
 }
