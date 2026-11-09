@@ -598,11 +598,18 @@ export default class Draw extends View {
       .child(row("Edges", [["sharp", null], ["round", { type: 3 }]].map(([lab, v]) => this.chip(t, `rd-${lab}`, lab, !!s("roundness") === !!v, `${lab} corners / curves`, () => ed.setStyle({ roundness: v }), 44))))
       .child(row("Font", Object.keys(FONT_FAMILY).map(f => this.chip(t, `ff-${f}`, f, (ed.selected()[0] && (ed.selected()[0].type === "text" ? ed.selected()[0].fontFamily : ed.doc.labelOf(ed.selected()[0])?.fontFamily) || ed.style.fontFamily) === FONT_FAMILY[f], `Font: ${f}`, () => ed.setStyle({ fontFamily: FONT_FAMILY[f] }), 40))))
       .child(row("Text", [16, 20, 28, 36].map(f => this.chip(t, `fs-${f}`, `${f}`, (ed.selectedFont() ?? ed.style.fontSize) === f, `Font size ${f} (= and -)`, () => ed.setStyle({ fontSize: f }))), "= -"));
-    const arrowSel = ed.selected().find(e => e.type === "arrow");
-    if (arrowSel || ed.tool === "arrow") {
-      const kind = a => (a?.elbowed ? "elbow" : a?.roundness ? "curve" : "sharp"), cur = arrowSel ? kind(arrowSel) : kind(ed.style);
-      body.child(row("Arrow", [["sharp", { elbowed: false, roundness: null }], ["curve", { elbowed: false, roundness: { type: 2 } }], ["elbow", { elbowed: true, roundness: null }]].map(([lab, patch]) =>
-        this.chip(t, `at-${lab}`, { sharp: "╱", curve: "◠", elbow: "┐" }[lab] + " " + lab, cur === lab, `Arrow type: ${lab}`, () => ed.setStyle(patch), 50))));
+    const lineSel = ed.selected().find(e => e.type === "arrow" || e.type === "line");
+    if (lineSel || ed.tool === "arrow" || ed.tool === "line") {
+      // Three ways to run a line: straight stretches, a smooth curve through its points, or right angles routed around shapes.
+      const kind = a => (a?.elbowed ? "elbow" : a?.roundness ? "curve" : "sharp"), cur = lineSel ? kind(lineSel) : kind(ed.style);
+      const isArrow = lineSel ? lineSel.type === "arrow" : ed.tool === "arrow";
+      const types = [["sharp", { elbowed: false, roundness: null }, "Straight stretches, sharp corners at bends"], ["curve", { elbowed: false, roundness: { type: 2 } }, "A smooth curve through its points (a straight one gets an arc)"], ["elbow", { elbowed: true, roundness: null }, "Right angles, routed around shapes"]]
+        .filter(([lab]) => isArrow || lab !== "elbow");
+      body.child(row(isArrow ? "Arrow" : "Line", types.map(([lab, patch, tip]) =>
+        this.chip(t, `at-${lab}`, { sharp: "╱", curve: "◠", elbow: "┐" }[lab] + " " + lab, cur === lab, tip, () => ed.setStyle(patch), 50))));
+      if (lineSel && !lineSel.elbowed) body.child(row("Bends", [
+        this.chip(t, "bend-add", "+ bend", false, "Bend it in the middle (or drag a ○ on it, anywhere)", () => ed.addBend(), 50),
+        this.chip(t, "bend-none", "straighten", false, "Remove every bend (double-click one to remove just it)", () => ed.straighten(), 66)]));
     }
     if (ed.selected().some(e => e.type === "arrow" || e.type === "line")) {
       body.child(row("Heads", [["none", null, null], ["→", null, "arrow"], ["↔", "arrow", "arrow"], ["▶", null, "triangle"], ["▷", null, "triangle_outline"], ["●", null, "dot"], ["◆", null, "diamond"], ["⊣", null, "bar"]].map(([lab, a, b], i) =>

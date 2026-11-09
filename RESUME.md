@@ -46,6 +46,17 @@ Set up 2026-11-08 so the person can test and give feedback:
   board played in a second Editor; the person's editor waits in `view.board` (file store still bound to it), so nothing in the
   demo is saved or exported. Esc goes back. Verified live in the test window (help overlay, demo mid-play and at the end).
 
+## Arrows (2026-11-08, fourth session, after the person said they "feel very strange")
+
+- Drawn sharp: one pass with pinned ends (loose = two), heads aim along the line's last stretch and grow with the stroke.
+  Curves are Catmull-Rom through their points (`curveThrough`, render only; excalidraw.com draws the same, probe-checked).
+- Connection points: four per shape (`portsOf`); an end near one stores a `fixedPoint` and stays on that side. Ends bind
+  live while dragging; ⌘ held = no binding; binding needs the shape itself, not its box. `editor.cursor()` drives the pane's cursor.
+- Bending: ○ handles mid-stretch on a selected arrow/line (drag = new bend), double-click a bend to remove it, panel
+  "+ bend" / "straighten", and "curve" on a straight line gives it an arc. Elbows keep their computed routes (no handles).
+- Not verified live: hover/drag hints and cursors (no input reaches the test window); headless tests and shots cover them.
+- Open: a port facing away from the other end looks different in excalidraw.com (it treats fixedPoint as an aim point).
+
 ## How to verify in real Herdr (never the person's window)
 
 Isolated home `~/.cache/hdt` already exists (layout `drawtest` shows only the board, file `~/.cache/hdt/t.excalidraw`):

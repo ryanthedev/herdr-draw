@@ -30,6 +30,13 @@ export const SHORTCUTS = [
     ["⌘G  ⌘⇧G", "Group, ungroup", ["g", { cmd: true }, "sel2"]],
     ["⌘⇧L", "Lock / unlock", ["l", { cmd: true, shift: true }, "sel"]],
   ]],
+  ["Arrows", [
+    ["● dot", "Arrow tool over a shape: end on a dot to stay on that side"],
+    ["⌘ drag", "Draw without attaching to shapes"],
+    ["drag ○", "On a selected arrow: bend it there"],
+    ["double-click", "On a bend: remove it"],
+    ["side panel", "Sharp, curve or elbow; + bend, straighten"],
+  ]],
   ["Style (selection, or the next shape)", [
     ["C", "Next stroke color", ["c", {}]],
     ["B", "Next fill color", ["b", {}]],

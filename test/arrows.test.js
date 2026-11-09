@@ -164,3 +164,56 @@ test("dragging an arrow's end to another shape moves it between the shapes' boun
   expect((t.ed.doc.get(a1.id).boundElements ?? []).some(x => x.id === arr.id)).toBe(false);
   expect(t.ed.doc.get(b1.id).boundElements.some(x => x.id === arr.id)).toBe(true);
 });
+
+// ── bending ──
+test("dragging the ○ in the middle of a selected arrow bends it there; one undo takes it back", () => {
+  const t = setup();
+  t.key("a"); t.drag([100, 300], [500, 300]);
+  const a = t.byType("arrow")[0];
+  t.key("v"); t.ed.select([a.id]);
+  const mid = t.ed.handles().find(h => h.kind === "mid");
+  expect([mid.x, mid.y]).toEqual([300, 300]);
+  t.ed.pointerMove({ x: mid.x, y: mid.y }, {});
+  expect(t.ed.cursor()).toBe("pointer");
+  t.drag([300, 300], [300, 200]);
+  const bent = t.ed.doc.get(a.id);
+  expect(bent.points.length).toBe(3);
+  expect([bent.x + bent.points[1][0], bent.y + bent.points[1][1]]).toEqual([300, 200]);
+  t.key("z", { cmd: true });
+  expect(t.ed.doc.get(a.id).points.length).toBe(2);
+});
+
+test("double-clicking a bend removes it; straighten removes them all", () => {
+  const t = setup();
+  t.key("a"); t.click([100, 300]); t.click([250, 200]); t.click([400, 300]); t.click([550, 200]);
+  t.ed.pointerDown({ x: 550, y: 200 }, { clickCount: 2 }); t.ed.pointerUp({ x: 550, y: 200 });
+  const a = t.byType("arrow")[0];
+  expect(a.points.length).toBe(4);
+  t.key("v"); t.ed.select([a.id]);
+  t.dblclick([250, 200]);
+  expect(t.ed.doc.get(a.id).points.length).toBe(3);
+  expect(t.ed.text).toBe(null);                              // not a label edit
+  t.ed.straighten();
+  expect(t.ed.doc.get(a.id).points.length).toBe(2);
+});
+
+test("making a straight arrow a curve gives it an arc; + bend bends a sharp one", () => {
+  const t = setup();
+  t.key("a"); t.drag([100, 300], [500, 300]);
+  const a = t.byType("arrow")[0];
+  t.key("v"); t.ed.select([a.id]);
+  t.ed.setStyle({ elbowed: false, roundness: { type: 2 } });
+  const c = t.ed.doc.get(a.id);
+  expect(c.points.length).toBe(3);
+  expect(Math.abs(c.y + c.points[1][1] - 300)).toBeCloseTo(80, 6);   // a fifth of 400 to the side
+  t.ed.straighten(); t.ed.setStyle({ roundness: null }); t.ed.addBend();
+  expect(t.ed.doc.get(a.id).points.length).toBe(3);
+});
+
+test("elbow arrows have no bend handles (their route is computed)", () => {
+  const t = setup();
+  t.ed.setStyle({ elbowed: true });
+  t.key("a"); t.drag([100, 300], [500, 400]);
+  t.key("v"); t.ed.select([t.byType("arrow")[0].id]);
+  expect(t.ed.handles().some(h => h.kind === "mid")).toBe(false);
+});

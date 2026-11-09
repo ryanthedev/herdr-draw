@@ -10,7 +10,7 @@ import {
 } from "./model.js";
 import { Doc } from "./doc.js";
 import {
-  bbox, unionBox, inBox, boxInBox, center, normalize, hits, hitTest, shapeAt, bindTargetAt, resolvedPoints, drawnPoints, settle, fileScene, portsOf, portAt, outlineDistance, mapIntoBox, distToSeg, segmentsIntersect,
+  bbox, unionBox, inBox, boxInBox, center, normalize, hits, hitTest, shapeAt, bindTargetAt, resolvedPoints, drawnPoints, curveThrough, settle, fileScene, portsOf, portAt, outlineDistance, mapIntoBox, distToSeg, segmentsIntersect,
   bounds, corners, rotate, rotateAbout, angleOf, centerOf, toLocal, toWorld as elToWorld, normAngle,
 } from "./geometry.js";
 import { paintScene, paintElement, project, rectCmds, withAlpha, outlinePoints } from "./render.js";
@@ -190,7 +190,13 @@ export class Editor {
       const pts = resolvedPoints(this.doc, els[0]);
       // An elbow's bends are routed, not placed: only its two ends have handles.
       if (els[0].elbowed) return [[0, pts[0]], [els[0].points.length - 1, pts[pts.length - 1]]].map(([i, p]) => ({ kind: "point", i, ...this.toScreen({ x: p[0], y: p[1] }) }));
-      return pts.map((p, i) => ({ kind: "point", i, ...this.toScreen({ x: p[0], y: p[1] }) }));
+      // Points, then a bend handle in the middle of each stretch (on the curve, for a curve): drag one to bend there.
+      const el = els[0], curved = !!el.roundness && pts.length > 2, drawn = curved ? curveThrough(pts) : null;
+      const mids = pts.slice(1).map((p, i) => {
+        const m = curved ? drawn[i * 12 + 6] : [(pts[i][0] + p[0]) / 2, (pts[i][1] + p[1]) / 2];
+        return { kind: "mid", i, ...this.toScreen({ x: m[0], y: m[1] }) };
+      }).filter(h => { const a = this.toScreen({ x: pts[h.i][0], y: pts[h.i][1] }); return Math.hypot(h.x - a.x, h.y - a.y) > HANDLE * 3; });   // too short a stretch: no room
+      return [...pts.map((p, i) => ({ kind: "point", i, ...this.toScreen({ x: p[0], y: p[1] }) })), ...mids];
     }
     const f = this.selFrame(); if (!f || !els.length) return [];
     const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
@@ -221,6 +227,10 @@ export class Editor {
     }
     if (m.button === "middle" || this.tool === "hand" || m.space) { this.g = { kind: "pan", start: p, view: { ...this.view } }; return; }
 
+    if (m.clickCount >= 2 && this.tool === "select") {   // double-click a bend: straighten it out
+      const h = this.handleAt(p), el = this.selected()[0];
+      if (h?.kind === "point" && el && isLinear(el) && h.i > 0 && h.i < el.points.length - 1) return this.removeBend(el.id, h.i);
+    }
     if (m.clickCount >= 2 && (this.tool === "select" || this.tool === "text")) {
       const hit = hitTest(this.doc, w, this.tol()) ?? shapeAt(this.doc, w);
       if (hit && (isShape(hit) || hit.type === "text" || isLinear(hit)) && this.doc.editable(hit)) return this.beginText(hit, w);
@@ -247,6 +257,13 @@ export class Editor {
       if (h.kind === "rotate") {
         const c = this.selCenter();
         this.g = { kind: "rotate", c, a0: Math.atan2(w.y - c.y, w.x - c.x), solo: this.soloRotated() ?? (els.filter(e => !isLabel(e)).length === 1 ? els[0] : null), orig, before };
+        return;
+      }
+      if (h.kind === "mid") {   // a new bend where the handle was, dragged from there
+        const el = els[0], c = clone(el), at = this.toWorld(h);
+        c.points.splice(h.i + 1, 0, [at.x - c.x, at.y - c.y]);
+        this.livePut(c);
+        this.g = { kind: "point", h: { kind: "point", i: h.i + 1 }, start: w, orig: new Map([[c.id, clone(c)]]), before: new Map([[el.id, before.get(el.id)]]) };
         return;
       }
       this.g = { kind: h.kind === "point" ? "point" : "resize", h, start: w, box: this.selBox(), solo: this.soloRotated(), orig, before };
@@ -962,11 +979,26 @@ export class Editor {
           }
           if (k === "endArrowhead" || k === "startArrowhead") { if (c.type === "arrow" || c.type === "line") c[k] = v; continue; }
           c[k] = v;
+          if (k === "roundness" && v && isLinear(c) && !c.elbowed && c.points.length === 2) bow(c);   // a straight line made a curve: show it
           if (k === "strokeColor") { const l = isShape(e) && this.doc.labelOf(e); if (l) tx.get(l.id).strokeColor = v; }
         }
       }
     });
   }
+  // Bends: one in the middle of each straight selected line, all of them gone, or one gone.
+  addBend() {
+    const els = this.selected().filter(e => isLinear(e) && e.type !== "freedraw" && !e.elbowed && e.points.length === 2);
+    if (!els.length) { this.flash = "select a straight arrow or line to bend (or drag its ○)"; return this.changed(); }
+    this.transact(tx => els.forEach(e => bow(tx.get(e.id))));
+  }
+  straighten() {
+    const els = this.selected().filter(e => isLinear(e) && e.type !== "freedraw" && !e.elbowed && e.points.length > 2);
+    this.transact(tx => els.forEach(e => { const c = tx.get(e.id); c.points = [c.points[0], c.points[c.points.length - 1]]; normalize(c); }));
+  }
+  removeBend(id, i) {
+    this.transact(tx => { const c = tx.get(id); c.points.splice(i, 1); normalize(c); });
+  }
+
   cycle(key, list) { const cur = this.selected()[0]?.[key] ?? this.style[key]; this.setStyle({ [key]: list[(list.indexOf(cur) + 1) % list.length] }); }
 
   toggleLock() { const els = this.selected(); if (els.length) { const v = !els.every(e => e.locked); this.transact(tx => els.forEach(e => { tx.get(e.id).locked = v; })); } }
@@ -1173,6 +1205,12 @@ export class Editor {
           items.push({ t: "path", cmds: ring, stroke: acc, width: 1.5, dash: null });
           continue;
         }
+        if (h.kind === "mid") {   // a bend handle: a small ring, quieter than the points
+          const ring = []; for (let i = 0; i <= 16; i++) { const t = i / 16 * Math.PI * 2; ring.push([i ? "L" : "M", h.x + Math.cos(t) * 3.5, h.y + Math.sin(t) * 3.5]); }
+          items.push({ t: "path", cmds: ring.slice(0, 16), fill: theme.bg });
+          items.push({ t: "path", cmds: ring, stroke: withAlpha(acc, 0.7), width: 1.5, dash: null });
+          continue;
+        }
         const r = h.kind === "point" ? 5 : 4;
         items.push({ t: "path", cmds: rectCmds(h.x - r, h.y - r, r * 2, r * 2).slice(0, 4), fill: theme.bg });
         items.push({ t: "path", cmds: rectCmds(h.x - r, h.y - r, r * 2, r * 2), stroke: acc, width: 1.5, dash: null });
@@ -1203,6 +1241,15 @@ export class Editor {
     }
     return items;
   }
+}
+
+// Give a straight two-point line a bend in its middle, a fifth of its length to the side:
+// with a curve type that's a gentle arc, otherwise a corner.
+function bow(c) {
+  const [a, b] = [c.points[0], c.points[c.points.length - 1]], dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy);
+  if (len < 8) return;
+  c.points = [a, [(a[0] + b[0]) / 2 + dy / len * len * 0.2, (a[1] + b[1]) / 2 - dx / len * len * 0.2], b];
+  normalize(c);
 }
 
 // A transaction: copies of elements to change, and what they were before.
