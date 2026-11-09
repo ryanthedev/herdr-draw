@@ -24,7 +24,8 @@ test/            bun test: core with synthetic input; the real Herdr adapter on 
 
 Ports the core expects, so new adapters plug in without touching it:
 - **Input**: `pointerDown/Move/Up(p, mods)`, `wheel`, `key(name, mods)`, `setText/commitText` — screen px, zoom-1.
-- **Output**: `displayList(theme)`; `textBox()` for where to put a text field; `needsTick()/tick()` for animation frames.
+- **Output**: `displayList(theme)`; `textBox()` for where to put a text field; `needsTick()/tick()` for animation frames;
+  `cursor()` names the pointer's cursor (crosshair, pointer, move, grab, grabbing, text, *-resize) for the adapter to map.
 - **Sync**: `new Editor({ onOp })` emits every change as `{ elements, appState?, transient? }`; `editor.receive(op)` takes changes from anywhere.
   Elements carry Excalidraw's `version`/`versionNonce`; higher version wins, so ops can be replayed in any order on any replica.
   The file store and `drawh` already use this. A network transport is another `onOp`/`receive` pair: no core change.
@@ -89,6 +90,12 @@ sent only to that window's id; quit it by its pid when done.
   both, so `fileScene()` (core/geometry.js) writes the derived label boxes on every save, and drawh runs core `settle` +
   `fileScene` through node on every save, re-routing/growing only what that run changed plus arrows bound to it (so drawh needs node or bun for nearly every write, ~0.2 s). An older board's
   first save from the pane rewrites its label boxes with no version bumps: expected, not a dirty pane. Check with `node scripts/excalidraw-probe.mjs BOARD OUT.png [ID]` (headless).
+- Arrow ends: a binding with a `fixedPoint` on or outside the outline is a **connection point** (side middles, `portsOf`)
+  and pins the end there; one inside the shape (excalidraw.com stores aim points there, with `mode: "orbit"`) aims at
+  the other end as before. excalidraw.com keeps our port fixedPoints on straight arrows (probe, 2026-11-08) but treats them
+  as aim points, so a port facing away from the other end shows the line leaving another side there. Ends bind while
+  dragging (no jump on release); ⌘ held: no binding. Curves (`roundness`) are drawn through their points (`curveThrough`)
+  in render only: files keep the points.
 - Images: `image` elements point at `files[fileId]` (base64 data URLs, ids are SHA-1 of the bytes); ops carry an add-only `files` map.
   `image()` loads only paths under `appHome()` (`$HERDR_APP_HOME` in a test window, not `home()`), so the pane decodes blobs into
   `<appHome>/.cache/herdr-draw/img/` (base64 via a temp file, never argv). Like text, images can't rotate in the pane; they paint in

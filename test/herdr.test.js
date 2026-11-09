@@ -458,3 +458,16 @@ test("the demo plays in its own editor and never touches the person's board", as
   await ui.cx.flush();
   expect(readFileSync(file, "utf8")).not.toBe(disk);                            // saving works again
 });
+
+test("the canvas cursor follows the editor: crosshair to draw, pointer on a connection point", async () => {
+  const ui = await open();
+  await ui.cx.flush();
+  ui.click("tool-rectangle"); ui.drag([400, 300], [520, 380]);
+  ui.click("tool-arrow");
+  ui.on("on_mouse_move", ui.ev(80, 80));
+  expect(ui.canvas().style.cursor_crosshair).toBe(true);
+  ui.on("on_mouse_move", ui.ev(460, 300));                                     // the box's top connection point
+  expect(ui.canvas().style.cursor_pointer).toBe(true);
+  ui.view.ed.setTool("hand");
+  expect(ui.canvas().style.cursor_grab).toBe(true);
+});

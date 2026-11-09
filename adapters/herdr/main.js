@@ -31,6 +31,9 @@ const ALIGN = [["left", "⇤", "⌥A"], ["hcenter", "↔", "⌥H"], ["right", "�
 const BADGES_MIN_W = 640;   // narrower than this, the toolbar shows icons only (keys stay in tooltips and ?)
 const isHelpKey = e => e.key === "?" || e.key_char === "?" || (e.key === "/" && !!e.modifiers?.shift && !e.modifiers?.platform);
 const CLEAR = "#00000000";
+const CURSORS = { crosshair: "cursor_crosshair", pointer: "cursor_pointer", move: "cursor_move", grab: "cursor_grab", grabbing: "cursor_grabbing",
+  text: "cursor_text", "ns-resize": "cursor_ns_resize", "ew-resize": "cursor_ew_resize", "nwse-resize": "cursor_nwse_resize", "nesw-resize": "cursor_nesw_resize" };
+const cursorStyle = (el, name) => (CURSORS[name] && typeof el[CURSORS[name]] === "function" ? el[CURSORS[name]]() : el);
 // image() loads only paths under the app home (~/.config/herdr-app or $HERDR_APP_HOME), so
 // board images are decoded into a hidden cache there: outside the mod folder (no hot reload,
 // and a dev sync's rsync --delete doesn't wipe it).
@@ -404,9 +407,8 @@ export default class Draw extends View {
 
   canvas(t) {
     const { layers, texts } = batchPaths(this.ed.displayList(this.palette()));
-    const tool = this.ed.tool;
-    let el = div().id("draw-canvas").flex_1().min_w(0).h_full().relative().overflow_hidden();
-    if (tool === "hand") el = el.cursor_grab(); else if (tool !== "select") el = el.cursor_crosshair();
+    // The editor names the cursor for what's under the pointer (handles, shapes, connection points).
+    const el = cursorStyle(div().id("draw-canvas").flex_1().min_w(0).h_full().relative().overflow_hidden(), this.ed.cursor());
     return this.canvasEvents(el)
       .children(layers.filter(l => l.n).map(l => l.img ? this.imageItem(l.img, t) : div().absolute().top(0).left(0).size_full().child(window.paint_path(l.b.build(), l.color))))
       .children(texts.map(it => this.textItem(it, t)))

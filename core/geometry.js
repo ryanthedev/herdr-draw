@@ -153,14 +153,48 @@ export function shapeAt(doc, p, except) {
 
 // What an arrow end can bind to: shapes (not frames) and images. Topmost first.
 export const bindable = el => (isShape(el) && el.type !== "frame") || el.type === "image";
-export function bindTargetAt(doc, p, except) {
+// On the shape itself (inside, or within `pad` of its outline): a diamond's or an ellipse's
+// empty box corners don't count.
+export function bindTargetAt(doc, p, except, pad = 4) {
   const els = doc.visible();
   for (let i = els.length - 1; i >= 0; i--) {
     const el = els[i];
     if (!bindable(el) || el.id === except) continue;
-    if (inBox(toLocal(el, p), bbox(el), 4)) return el;
+    if (el.type === "image" ? inBox(toLocal(el, p), bbox(el), pad) : outlineDistance(el, p) <= pad) return el;
   }
   return null;
+}
+
+// A shape's connection points: the middle of each side (a diamond's corners, an ellipse's
+// ends), on the outline (`at`) and `gap` out from it (`bind`), with the Excalidraw
+// `fixedPoint` an arrow end stores to stay there.
+const SIDES = [["top", 0.5, 0, 0, -1], ["right", 1, 0.5, 1, 0], ["bottom", 0.5, 1, 0, 1], ["left", 0, 0.5, -1, 0]];
+export function portsOf(el, gap = 6) {
+  const b = bbox({ ...el, angle: 0 });
+  return SIDES.map(([side, fx, fy, nx, ny]) => {
+    const on = { x: b.x + fx * b.w, y: b.y + fy * b.h }, out = { x: on.x + nx * gap, y: on.y + ny * gap };
+    const at = toWorld(el, on), bind = toWorld(el, out);
+    return { side, at: [at.x, at.y], bind: [bind.x, bind.y], fixedPoint: fixedPointOf(el, [bind.x, bind.y]) };
+  });
+}
+// The connection point within `tol` of p, on any bindable shape but `except`.
+export function portAt(doc, p, tol, except) {
+  let best = null;
+  for (const el of doc.visible()) {
+    if (!bindable(el) || el.id === except) continue;
+    for (const port of portsOf(el)) {
+      const d = Math.hypot(port.at[0] - p.x, port.at[1] - p.y);
+      if (d <= tol && (!best || d < best.d)) best = { el, port, d };
+    }
+  }
+  return best;
+}
+// Where a binding's fixedPoint puts the arrow end, if that's on or outside the outline (a
+// connection point). Inside (excalidraw.com stores aim points inside shapes) it doesn't pin.
+function fixedEnd(shape, b) {
+  if (!b?.fixedPoint) return null;
+  const box = bbox({ ...shape, angle: 0 }), w = toWorld(shape, { x: box.x + b.fixedPoint[0] * box.w, y: box.y + b.fixedPoint[1] * box.h });
+  return bindable(shape) && (shape.type === "image" ? !inBox(toLocal(shape, w), box, -0.5) : outlineDistance(shape, w) >= -0.5) ? [w.x, w.y] : null;
 }
 
 // Where a ray from a shape's center toward (tx, ty) leaves its outline, plus gap.
@@ -198,8 +232,13 @@ export function resolvedPoints(doc, el) {
     return out.map(p => [...p]);
   }
   const cOf = x => { const c = center(bbox(x)); return [c.x, c.y]; };
-  if (s) { const to = e && pts.length === 2 ? cOf(e) : pts[1]; pts[0] = edgePoint(s, to[0], to[1], el.startBinding.gap ?? 6); }
-  if (e) { const from = s && pts.length === 2 ? cOf(s) : pts[pts.length - 2]; pts[pts.length - 1] = edgePoint(e, from[0], from[1], el.endBinding.gap ?? 6); }
+  // Ends on a connection point stay there; the others aim at the far end (pinned, a shape's
+  // center, or the next point) and sit on their outline.
+  const fs = s && fixedEnd(s, el.startBinding), fe = e && fixedEnd(e, el.endBinding), last = pts.length - 1;
+  if (fs) pts[0] = fs;
+  if (fe) pts[last] = fe;
+  if (s && !fs) { const to = pts.length === 2 ? (fe ?? (e ? cOf(e) : pts[1])) : pts[1]; pts[0] = edgePoint(s, to[0], to[1], el.startBinding.gap ?? 6); }
+  if (e && !fe) { const from = pts.length === 2 ? (fs ?? (s ? cOf(s) : pts[0])) : pts[last - 1]; pts[last] = edgePoint(e, from[0], from[1], el.endBinding.gap ?? 6); }
   return pts;
 }
 
@@ -243,7 +282,7 @@ function withFixedPoints(doc, el, pts) {
     const b = el[k], shape = b && doc.get(b.elementId);
     if (!b) continue;
     if (el.elbowed && shape) out[k] = { ...b, fixedPoint: fixedPointOf(shape, p) };
-    else if (b.fixedPoint) { const { fixedPoint, ...rest } = b; out[k] = rest; }
+    else if (b.fixedPoint && !(shape && fixedEnd(shape, b))) { const { fixedPoint, ...rest } = b; out[k] = rest; }   // a connection point keeps its fixedPoint
   }
   return out;
 }

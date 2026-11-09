@@ -10,10 +10,10 @@ import {
 } from "./model.js";
 import { Doc } from "./doc.js";
 import {
-  bbox, unionBox, inBox, boxInBox, center, normalize, hits, hitTest, shapeAt, bindTargetAt, resolvedPoints, drawnPoints, settle, fileScene, mapIntoBox, distToSeg, segmentsIntersect,
+  bbox, unionBox, inBox, boxInBox, center, normalize, hits, hitTest, shapeAt, bindTargetAt, resolvedPoints, drawnPoints, settle, fileScene, portsOf, portAt, outlineDistance, mapIntoBox, distToSeg, segmentsIntersect,
   bounds, corners, rotate, rotateAbout, angleOf, centerOf, toLocal, toWorld as elToWorld, normAngle,
 } from "./geometry.js";
-import { paintScene, paintElement, project, rectCmds, withAlpha } from "./render.js";
+import { paintScene, paintElement, project, rectCmds, withAlpha, outlinePoints } from "./render.js";
 import { PRESETS, timelineEnd } from "./anim.js";
 import { labelHostHeight } from "./text.js";
 import { isMermaid, mermaidToElements } from "./mermaid.js";
@@ -44,6 +44,10 @@ const SNAP = 6;            // object snap distance, screen px
 const DRAG_SLOP = 3;       // px before a press becomes a drag
 const ROT_GAP = 24;        // the rotate handle sits this far above the selection, screen px
 const ROT_SNAP = Math.PI / 12;   // shift snaps rotation to 15°
+const PORT_SNAP = 12;      // how close an arrow end must come to a connection point to take it, screen px
+const BIND_PAD = 8;        // how far outside a shape an arrow end still binds to it, screen px
+const DRAWING_TOOLS = new Set(["rectangle", "diamond", "ellipse", "arrow", "line", "freedraw", "text", "frame"]);
+const RESIZE_CURSOR = { n: "ns-resize", s: "ns-resize", e: "ew-resize", w: "ew-resize", nw: "nwse-resize", se: "nwse-resize", ne: "nesw-resize", sw: "nesw-resize" };
 
 export class Editor {
   constructor({ scene, onOp = () => {}, clock = () => Date.now() } = {}) {
@@ -212,6 +216,7 @@ export class Editor {
     if (this.g?.kind === "poly") {   // adding points to a click-by-click line
       if (m.clickCount >= 2) return this.finishPoly();
       const el = this.g.el; el.points[el.points.length - 1] = [w.x - el.x, w.y - el.y]; el.points.push([w.x - el.x, w.y - el.y]);
+      el.endBinding = null;   // a bend, not an end: the end binds where the line finishes
       return this.livePut(el);
     }
     if (m.button === "middle" || this.tool === "hand" || m.space) { this.g = { kind: "pan", start: p, view: { ...this.view } }; return; }
@@ -273,8 +278,7 @@ export class Editor {
     if (this.tool === "arrow" || this.tool === "line") {
       fields.points = [[0, 0], [0, 0]];
       if (this.tool === "arrow" && s.elbowed) { fields.elbowed = true; fields.roundness = null; }
-      const target = bindTargetAt(this.doc, w);
-      if (target) fields.startBinding = { elementId: target.id, focus: 0, gap: 6 };
+      fields.startBinding = this.bindingAt(w, null, m, fields.elbowed);
     }
     if (this.tool === "frame") Object.assign(fields, { backgroundColor: "transparent", strokeWidth: 1, name: `Frame ${this.doc.live().filter(e => e.type === "frame").length + 1}`, customData: { z: this.doc.minZ(this.activeLayer) - 1 } });
     const el = this.newEl(this.tool, fields);
@@ -299,9 +303,9 @@ export class Editor {
       case "move": return this.moveSel(g, p, w, m);
       case "resize": return g.solo ? this.resizeRotated(g, w, m) : this.resizeSel(g, w, m);
       case "rotate": return this.rotateSel(g, w, m);
-      case "point": return this.movePoint(g, w);
+      case "point": return this.movePoint(g, w, m);
       case "create": return this.dragCreate(g, w, m);
-      case "poly": { const el = g.el; el.points[el.points.length - 1] = [w.x - el.x, w.y - el.y]; return this.livePut(el); }
+      case "poly": { const el = g.el; el.points[el.points.length - 1] = [w.x - el.x, w.y - el.y]; el.endBinding = this.bindingAt(w, el.startBinding?.elementId, m, el.elbowed); return this.livePut(el); }
       case "erase": { const from = this.toWorld(g.lastE ?? p); g.lastE = p; this.eraseAt(from, w); return; }
       case "laser": this.laser.push({ x: w.x, y: w.y, t: this.clock() }); return this.changed();
     }
@@ -319,7 +323,7 @@ export class Editor {
       }
       case "resize": case "point": case "rotate": {
         const dirty = new Map([...g.orig.keys()].map(id => [id, clone(this.doc.get(id))]).filter(([, e]) => e));
-        if (g.kind === "point") this.rebind(dirty.values().next().value, g.h.i);
+        if (g.kind === "point") this.linkBound(dirty.values().next().value, g.before, dirty);
         return this.commitGesture(g.before, dirty);
       }
       case "create": return this.finishCreate(g, p);
@@ -346,10 +350,55 @@ export class Editor {
   }
 
   updateHover(p) {
-    if (this.tool !== "select") { if (this.hover) { this.hover = null; this.changed(); } return; }
-    const hit = hitTest(this.doc, this.toWorld(p), this.tol());
+    this.pointer = p;
+    const w = this.toWorld(p), linking = this.tool === "arrow" || this.tool === "line";
+    // With the arrow or line tool: the shape an arrow started here would attach to, and its connection point.
+    const hint = linking ? this.bindingAt(w, null, {}, this.tool === "arrow" && this.style.elbowed) : null;
+    const hk = hint ? `${hint.elementId}|${hint.fixedPoint ?? ""}` : "";
+    if (hk !== (this.hintKey ?? "")) { this.hintKey = hk; this.hint = hint; this.changed(); }
+    const hit = this.tool === "select" ? hitTest(this.doc, w, this.tol()) : null;
     const id = hit?.id ?? null;
     if (id !== this.hover) { this.hover = id; this.changed(); }
+    // The cursor depends on what's under the pointer (handles, elements): the adapter asks cursor() on change.
+    const c = this.cursor();
+    if (c !== this.lastCursor) { this.lastCursor = c; this.changed(); }
+  }
+
+  // What an arrow end at world point w attaches to: a connection point near it (pinned there),
+  // else the shape under it (aimed at the other end), else nothing. ⌘ held: nothing.
+  bindingAt(w, except, m = {}, elbowed = false) {
+    if (m.cmd || m.ctrl) return null;
+    const port = portAt(this.doc, w, PORT_SNAP / this.view.scale, except);
+    if (port) return elbowed ? { elementId: port.el.id, focus: 0, gap: 6 } : { elementId: port.el.id, focus: 0, gap: 6, fixedPoint: port.port.fixedPoint };
+    const s = bindTargetAt(this.doc, w, except, BIND_PAD / this.view.scale);
+    return s ? { elementId: s.id, focus: 0, gap: 6 } : null;
+  }
+
+  // The pointer's cursor, by tool and what's under it (adapters map the names to their own):
+  // default, crosshair, pointer, move, grab, grabbing, text, ns-resize, ew-resize, nwse-resize, nesw-resize.
+  cursor() {
+    const g = this.g;
+    if (g?.kind === "pan") return "grabbing";
+    if (g?.kind === "rotate") return "grabbing";
+    if (g?.kind === "move" || g?.kind === "point") return g.kind === "point" ? "pointer" : "move";
+    if (g?.kind === "resize") return RESIZE_CURSOR[g.h.dir] ?? "default";
+    if (g?.kind === "create" || g?.kind === "poly") return this.hint || this.endHint() ? "pointer" : "crosshair";
+    if (this.tool === "hand") return "grab";
+    if (this.tool === "text") return "text";
+    if (this.tool === "arrow" || this.tool === "line") return this.hint ? "pointer" : "crosshair";
+    if (this.tool !== "select") return "crosshair";
+    const p = this.pointer; if (!p) return "default";
+    const h = this.handleAt(p);
+    if (h) return h.kind === "rotate" ? "grab" : h.kind === "resize" ? RESIZE_CURSOR[h.dir] : "pointer";
+    return this.hover && this.doc.editable(this.doc.get(this.hover) ?? {}) ? "move" : "default";
+  }
+  // The binding the arrow being drawn or dragged would end with (shown while dragging).
+  endHint() {
+    const g = this.g;
+    if (g?.kind === "create" && (g.el.type === "arrow" || g.el.type === "line")) return this.doc.get(g.el.id)?.endBinding ?? null;
+    if (g?.kind === "poly") return this.doc.get(g.el.id)?.endBinding ?? null;
+    if (g?.kind === "point") { const el = this.doc.get(g.orig.keys().next().value); return el && (g.h.i === 0 ? el.startBinding : g.h.i === el.points.length - 1 ? el.endBinding : null); }
+    return null;
   }
 
   // Put a working copy into the board without history (live drag), and tell the store.
@@ -483,23 +532,16 @@ export class Editor {
     if (Math.abs(host.height) < need) host.height = need;
   }
 
-  movePoint(g, w) {
+  movePoint(g, w, m = {}) {
     const o = g.orig.values().next().value, c = clone(o), at = this.snapPoint(w);
     c.points[g.h.i] = [at.x - o.x, at.y - o.y];
-    // Dragging an end off its shape unbinds it for now; rebind() on release.
-    if (g.h.i === 0) c.startBinding = null;
-    if (g.h.i === c.points.length - 1) c.endBinding = null;
+    // An end binds as it moves (to a connection point or a shape), so what you see is what you get on release.
+    if (g.h.i === 0) c.startBinding = this.bindingAt(w, c.endBinding?.elementId, m, c.elbowed);
+    if (g.h.i === c.points.length - 1) c.endBinding = this.bindingAt(w, c.startBinding?.elementId, m, c.elbowed);
     this.livePut(c);
   }
 
-  rebind(el, i) {
-    if (!el || (i !== 0 && i !== el.points.length - 1)) return;
-    const p = { x: el.x + el.points[i][0], y: el.y + el.points[i][1] };
-    const other = i === 0 ? el.endBinding?.elementId : el.startBinding?.elementId;
-    const s = bindTargetAt(this.doc, p, other);
-    const b = s ? { elementId: s.id, focus: 0, gap: 6 } : null;
-    if (i === 0) el.startBinding = b; else el.endBinding = b;
-  }
+
 
   dragCreate(g, w, m) {
     const el = g.el, at = this.snapPoint(w);
@@ -514,6 +556,8 @@ export class Editor {
       let q = [at.x - el.x, at.y - el.y];
       if (m.shift) { const a = Math.round(Math.atan2(q[1], q[0]) / (Math.PI / 12)) * (Math.PI / 12), r = Math.hypot(q[0], q[1]); q = [Math.cos(a) * r, Math.sin(a) * r]; }
       el.points[el.points.length - 1] = q;
+      // Bind as it's drawn: the end snaps to the shape (or connection point) under it now, not on release.
+      el.endBinding = this.bindingAt({ x: el.x + q[0], y: el.y + q[1] }, el.startBinding?.elementId, m, el.elbowed);
     }
     this.livePut(el);
   }
@@ -532,16 +576,11 @@ export class Editor {
         el.points[1] = [0, 0];
         return this.changed();
       }
-      this.bindEnd(el);
     } else if (el.type === "freedraw" && el.points.length < 2) el.points.push([0.5, 0.5]);
     this.endCreate(el, g.before);
   }
 
-  bindEnd(el) {
-    const end = el.points[el.points.length - 1];
-    const s = bindTargetAt(this.doc, { x: el.x + end[0], y: el.y + end[1] }, el.startBinding?.elementId);
-    if (s) el.endBinding = { elementId: s.id, focus: 0, gap: 6 };
-  }
+
 
   finishPoly() {
     const g = this.g; if (!g || g.kind !== "poly") return;
@@ -552,8 +591,23 @@ export class Editor {
     if (el.points.length < 2 || dist(el.points[0], el.points[el.points.length - 1]) < 4 && el.points.length === 2) {
       const dead = { ...clone(el), isDeleted: true }; this.livePut(dead); return this.changed();
     }
-    this.bindEnd(el);
+    const end = el.points[el.points.length - 1];   // the double-click's first click made a bend here: bind the end again
+    el.endBinding = this.bindingAt({ x: el.x + end[0], y: el.y + end[1] }, el.startBinding?.elementId, {}, el.elbowed);
     this.endCreate(el, g.before);
+  }
+
+  // A dragged arrow end changed shapes: the shapes' boundElements follow (Excalidraw keeps both sides).
+  linkBound(el, before, dirty) {
+    if (!el) return;
+    const now = new Set([el.startBinding?.elementId, el.endBinding?.elementId].filter(Boolean));
+    for (const s of this.doc.live()) {
+      const has = (s.boundElements ?? []).some(x => x.id === el.id && x.type === "arrow");
+      if (has === now.has(s.id) || isLinear(s) || isLabel(s)) continue;
+      if (!before.has(s.id)) before.set(s.id, clone(s));
+      const c = clone(s);
+      c.boundElements = has ? c.boundElements.filter(x => x.id !== el.id) : [...(c.boundElements ?? []), { id: el.id, type: "arrow" }];
+      dirty.set(s.id, c);
+    }
   }
 
   endCreate(el, before) {
@@ -898,7 +952,11 @@ export class Editor {
           if (k === "roundness" && !["rectangle", "diamond", "arrow", "line"].includes(c.type)) continue;
           if (k === "elbowed") {   // arrow type: elbow arrows are routed; turning it off keeps the current bends
             if (c.type !== "arrow") continue;
-            if (!v && c.elbowed) { const pts = resolvedPoints(this.doc, e); c.x = pts[0][0]; c.y = pts[0][1]; c.points = pts.map(p => [p[0] - c.x, p[1] - c.y]); }
+            if (!v && c.elbowed) {
+              const pts = resolvedPoints(this.doc, e); c.x = pts[0][0]; c.y = pts[0][1]; c.points = pts.map(p => [p[0] - c.x, p[1] - c.y]);
+              // An elbow's fixedPoints are where its route met the shape, not connection points someone chose.
+              for (const k of ["startBinding", "endBinding"]) if (c[k]?.fixedPoint) { const { fixedPoint, ...rest } = c[k]; c[k] = rest; }
+            }
             c.elbowed = v; if (v) c.roundness = null;
             continue;
           }
@@ -1045,7 +1103,14 @@ export class Editor {
   }
   selectedFont() { const e = this.selected()[0]; if (!e) return null; if (e.type === "text") return e.fontSize; const l = isShape(e) && this.doc.labelOf(e); return l?.fontSize ?? null; }
 
-  setTool(id) { if (this.g?.kind === "poly") this.finishPoly(); this.tool = id; if (id !== "select") this.hover = null; this.changed(); }
+  // Picking a drawing tool clears the selection (as in Excalidraw): its handles would cover the
+  // connection points an arrow aims at, and style changes then go to the next shape.
+  setTool(id) {
+    if (this.g?.kind === "poly") this.finishPoly();
+    this.tool = id; if (id !== "select") this.hover = null;
+    if (DRAWING_TOOLS.has(id) && this.sel.size) this.select([]);
+    this.changed();
+  }
 
   // ── what to paint ──────────────────────────────────────────────────────
 
@@ -1063,6 +1128,23 @@ export class Editor {
     return [...pts.map((p, i) => [i ? "L" : "M", p.x, p.y]), ["L", pts[0].x, pts[0].y]];
   }
 
+  // Where an arrow will attach: the shape's outline in the accent color, its connection points
+  // as small rings (not for elbows, which pick their own sides), and the one it takes filled.
+  paintBindHint(items, P, theme) {
+    const b = this.g ? this.endHint() : this.hint, shape = b && this.doc.get(b.elementId);
+    if (!shape) return;
+    const acc = theme.accent, ring = (x, y, r) => { const c = []; for (let i = 0; i <= 20; i++) { const t = i / 20 * Math.PI * 2; c.push([i ? "L" : "M", x + Math.cos(t) * r, y + Math.sin(t) * r]); } return c; };
+    const outline = (shape.type === "image" ? outlinePoints({ ...shape, type: "rectangle", roundness: null }) : outlinePoints(shape)).map(([x, y]) => P(x, y));
+    items.push({ t: "path", cmds: outline.map((p, i) => [i ? "L" : "M", ...p]), stroke: withAlpha(acc, 0.85), width: 2, dash: null });
+    const elbowed = this.g?.el?.elbowed ?? (this.g?.kind === "point" ? this.doc.get(this.g.orig.keys().next().value)?.elbowed : this.tool === "arrow" && this.style.elbowed);
+    if (elbowed) return;
+    for (const port of portsOf(shape)) {
+      const [x, y] = P(...port.at), on = !!b.fixedPoint && Math.hypot(b.fixedPoint[0] - port.fixedPoint[0], b.fixedPoint[1] - port.fixedPoint[1]) < 1e-6;
+      items.push({ t: "path", cmds: ring(x, y, on ? 5.5 : 4).slice(0, 20), fill: on ? acc : theme.bg });
+      items.push({ t: "path", cmds: ring(x, y, on ? 5.5 : 4), stroke: acc, width: 1.5, dash: null });
+    }
+  }
+
   displayList(theme) {
     const time = this.time();
     const items = paintScene(this.doc, this.view, theme, { time: time ?? undefined });
@@ -1074,6 +1156,7 @@ export class Editor {
       const el = this.doc.get(this.hover);
       if (el) items.push({ t: "path", cmds: this.outlineCmds(el, 4), stroke: withAlpha(acc, 0.45), width: 1, dash: null });
     }
+    this.paintBindHint(items, P, theme);
     const els = this.selected();
     if (els.length) {
       if (els.length > 1) for (const e of els) { if (isLabel(e)) continue; items.push({ t: "path", cmds: this.outlineCmds(e, 3), stroke: withAlpha(acc, 0.5), width: 1, dash: [3, 3] }); }
