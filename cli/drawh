@@ -27,6 +27,10 @@ Needs node (or bun) on PATH: every write of a board with labels or arrows runs t
   drawh lib ls | add FILE ID... [--name N] | insert FILE NAME|ID [--at X,Y] | import PATH.excalidrawlib | rm NAME|ID
                                                 the shared library (excalidraw.com's .excalidrawlib format), also in the
                                                 pane's sidebar; --lib PATH for another file
+  drawh frame FILE NAME --at X,Y [--w 800 --h 600] | --around ID... [--pad 40]
+                                                a named frame: a page of the board (PgDn / PgUp in the pane step
+                                                through frames, top to bottom, left to right); --around fits it
+                                                around existing elements; drawn under them; prints its id
   drawh rotate FILE ID... DEG                   turn elements by DEG degrees (clockwise) about their center
   drawh rm FILE ID...                           delete elements (and their labels)
   drawh clear FILE                              delete everything
@@ -373,6 +377,15 @@ def set_label(scene, shape, text, size=20):
     return t
 
 
+def box_of(e):
+    """x0, y0, x1, y1 of an element: lines and arrows by their points, anything else by its box."""
+    if e.get("points"):
+        xs = [e["x"] + p[0] for p in e["points"]]; ys = [e["y"] + p[1] for p in e["points"]]
+        return min(xs), min(ys), max(xs), max(ys)
+    x0, x1 = sorted((e["x"], e["x"] + e["width"])); y0, y1 = sorted((e["y"], e["y"] + e["height"]))
+    return x0, y0, x1, y1
+
+
 def center(el):
     return el["x"] + el["width"] / 2, el["y"] + el["height"] / 2
 
@@ -385,6 +398,8 @@ def describe(scene, e):
         d["label"] = lab["text"]
     if e["type"] == "text":
         d["text"] = e["text"]
+    if e["type"] == "frame":
+        d["name"] = e.get("name") or "Frame"
     for k, name in (("startBinding", "from"), ("endBinding", "to")):
         if e.get(k):
             d[name] = e[k]["elementId"]
@@ -418,6 +433,9 @@ def main():
     ex.add_argument("--dark", action="store_true"); ex.add_argument("--scale", type=float, default=2)
     lb_ = sub.add_parser("lib"); lb_.add_argument("op", choices=["ls", "add", "insert", "import", "rm"]); lb_.add_argument("rest", nargs="*")
     lb_.add_argument("--name"); lb_.add_argument("--at"); lb_.add_argument("--lib")
+    fr = sub.add_parser("frame"); fr.add_argument("file"); fr.add_argument("name"); fr.add_argument("--at")
+    fr.add_argument("--w", type=float, default=800); fr.add_argument("--h", type=float, default=600)
+    fr.add_argument("--around", nargs="+"); fr.add_argument("--pad", type=float, default=40); fr.add_argument("--layer")
     ro = sub.add_parser("rotate"); ro.add_argument("file"); ro.add_argument("ids", nargs="+"); ro.add_argument("deg", type=float)
     a.add_argument("--angle", type=float, default=0, help="degrees, clockwise")
     rm = sub.add_parser("rm"); rm.add_argument("file"); rm.add_argument("ids", nargs="+")
@@ -638,6 +656,22 @@ def main():
                 else: cd["anim"] = {"preset": args.preset, "start": t_, "duration": args.duration}
                 x["customData"] = cd; touch(x)
             t_ += args.stagger
+    elif args.cmd == "frame":
+        if args.around:
+            boxes = [box_of(find(scene, r)) for r in args.around]
+            x0, y0 = min(b[0] for b in boxes) - args.pad, min(b[1] for b in boxes) - args.pad
+            x1, y1 = max(b[2] for b in boxes) + args.pad, max(b[3] for b in boxes) + args.pad
+        elif args.at:
+            x0, y0 = pair(args.at, "--at"); x1, y1 = x0 + args.w, y0 + args.h
+        else:
+            die("frame needs --at X,Y or --around ID...")
+        el = base("frame", x=x0, y=y0, width=x1 - x0, height=y1 - y0, name=args.name, strokeWidth=1)
+        # Under everything on its layer, as the pane draws a new frame.
+        lid = layer_id(scene, args.layer)
+        low = min([e.get("customData", {}).get("z", 0) for e in live(scene) if e.get("customData", {}).get("layer", "base") == lid] or [1])
+        el["customData"] = {"layer": lid, "z": low - 1}
+        scene["elements"].append(el)
+        out = el["id"]
     elif args.cmd == "mermaid":
         src = sys.stdin.read() if args.src == "-" else open(os.path.expanduser(args.src)).read()
         els = mermaid_elements(src, elbow=args.elbow)

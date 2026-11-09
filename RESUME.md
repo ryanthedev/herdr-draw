@@ -4,7 +4,8 @@ For the next session picking this up. Read `CLAUDE.md` first (architecture, port
 
 ## Where it stands
 
-- All work is committed locally on `main` and **not pushed** (no remote yet). Latest: third session (see `git log`).
+- `main` is on GitHub (`origin`, git@github.com:ryanthedev/herdr-draw.git). The person's work Mac `ska` (a Herdr machine)
+  runs a clone at `~/repos/herdr-draw`: to update it, push, then `ssh ska 'cd ~/repos/herdr-draw && git pull --ff-only && sh scripts/install.sh'`.
 - `bun test`: 133 tests, all passing. Snapshots in `test/out/*.png`.
 - The person's install (`~/.config/herdr-app/mods/herdr-draw`, and `drawh` on PATH via `~/.local/bin/drawh`) is **behind**: see below.
 

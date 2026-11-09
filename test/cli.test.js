@@ -109,3 +109,22 @@ test("drawh lib: save elements from a board, list, insert into another board (st
   expect(drawh("lib", "ls", "--lib", lib)).not.toContain("Client/server");
   expect(JSON.parse(readFileSync(lib, "utf8"))).toMatchObject({ type: "excalidrawlib", version: 2 });
 });
+
+test("drawh frame: named pages, around elements or at a spot, under the drawing, in reading order", () => {
+  const f = `${mkdtempSync(`${tmpdir()}/drawh-`)}/b.excalidraw`;
+  const a = drawh("add", f, "rect", "--at", "0,0", "--label", "Search");
+  const b = drawh("add", f, "rect", "--at", "300,0", "--label", "Pick");
+  drawh("arrow", f, a, b);
+  const p1 = drawh("frame", f, "Journey 1: Search", "--around", a, "Pick", "--pad", "30");
+  const p2 = drawh("frame", f, "Journey 2: Pay", "--at", "0,600", "--w", "500", "--h", "300");
+  const ed = new Editor({ scene: JSON.parse(readFileSync(f, "utf8")) });
+  expect(ed.frames().map(fr => fr.name)).toEqual(["Journey 1: Search", "Journey 2: Pay"]);
+  const fr = ed.doc.get(p1);
+  expect([fr.x, fr.y, fr.width, fr.height]).toEqual([-30, -30, 500, 140]);   // 0..440 wide, 0..80 tall, plus 30 around
+  expect(fr.customData.z).toBeLessThan(ed.doc.get(a).customData.z);           // drawn under the shapes
+  expect(ed.doc.get(p2).width).toBe(500);
+  expect(JSON.parse(drawh("ls", f, "--json")).find(r => r.id === p2).name).toBe("Journey 2: Pay");
+  ed.goToFrame(p2);
+  expect(ed.frameAt).toBe(p2);
+  expect(() => drawh("frame", f, "nowhere")).toThrow(/--at X,Y or --around/);
+});
