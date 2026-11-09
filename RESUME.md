@@ -5,7 +5,7 @@ For the next session picking this up. Read `CLAUDE.md` first (architecture, port
 ## Where it stands
 
 - All work is committed locally on `main` and **not pushed** (no remote yet). Latest: third session (see `git log`).
-- `bun test`: 131 tests, all passing. Snapshots in `test/out/*.png`.
+- `bun test`: 132 tests, all passing. Snapshots in `test/out/*.png`.
 - The person's install (`~/.config/herdr-app/mods/herdr-draw`, and `drawh` on PATH via `~/.local/bin/drawh`) is **behind**: see below.
 
 Built so far (commit order):

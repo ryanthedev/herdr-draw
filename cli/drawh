@@ -275,10 +275,16 @@ def touch(el):
     el["updated"] = int(time.time() * 1000)
 
 
+LOADED = {}   # id -> (version, versionNonce) as read: save() settles only what this run changed
+
+
 def load(path):
     try:
         with open(path) as f:
-            return json.load(f)
+            scene = json.load(f)
+        LOADED.clear()
+        LOADED.update({e.get("id"): (e.get("version"), e.get("versionNonce")) for e in scene.get("elements", [])})
+        return scene
     except FileNotFoundError:
         return {"type": "excalidraw", "version": 2, "source": "herdr-draw", "elements": [],
                 "appState": {"viewBackgroundColor": "#ffffff"}, "files": {}}
@@ -293,20 +299,23 @@ def settle_for_file(scene):
     label boxes (centered in their shape or on their arrow; derived, so no new versions)."""
     if not any(not e.get("isDeleted") and (e.get("elbowed") or e.get("containerId") or e.get("startBinding") or e.get("endBinding")) for e in scene["elements"]):
         return
+    # Only what this run changed (and arrows bound to it) is re-routed or grown, as the pane settles only what was
+    # edited: an arrow excalidraw.com aimed off-center stays as it is until someone moves it or its shapes.
+    touched = [e["id"] for e in scene["elements"] if LOADED.get(e.get("id")) != (e.get("version"), e.get("versionNonce"))]
     url = lambda m: json.dumps("file://" + os.path.join(core_dir(), m))
     script = ("import { Doc } from %s; import { settle, fileScene } from %s; import { touch, isShape } from %s; import { labelHostHeight } from %s;"
               "let s = ''; process.stdin.on('data', d => s += d); process.stdin.on('end', () => {"
-              " const doc = new Doc(JSON.parse(s)), out = {};"
+              " const { scene, touched } = JSON.parse(s), doc = new Doc(scene), out = {}, t = new Set(touched);"
               # shapes grow down to fit their labels (the pane's fitHost), before arrows are routed to them
-              " for (const el of doc.live()) { const l = isShape(el) && doc.labelOf(el); if (!l || !l.text) continue;"
+              " for (const el of doc.live()) { const l = isShape(el) && doc.labelOf(el); if (!l || !l.text || !(t.has(el.id) || t.has(l.id))) continue;"
               "  const need = labelHostHeight(l, el); if (Math.abs(el.height) >= need) continue;"
-              "  const c = structuredClone(el); c.height = need; touch(c); doc.apply({ elements: [c] }, { force: true }); out[c.id] = c; }"
-              " for (const el of doc.live()) if (el.elbowed || el.startBinding || el.endBinding) { const c = structuredClone(el);"
+              "  const c = structuredClone(el); c.height = need; touch(c); doc.apply({ elements: [c] }, { force: true }); out[c.id] = c; t.add(c.id); }"
+              " for (const el of doc.live()) if ((el.elbowed || el.startBinding || el.endBinding) && (t.has(el.id) || t.has(el.startBinding?.elementId) || t.has(el.endBinding?.elementId))) { const c = structuredClone(el);"
               "  if (settle(doc, c)) { touch(c); doc.apply({ elements: [c] }, { force: true }); out[c.id] = c; } }"
               " const before = new Map(doc.toScene().elements.map(e => [e.id, e]));"
               " for (const e of fileScene(doc, doc.toScene()).elements) if (e !== before.get(e.id)) out[e.id] = e;"
               " process.stdout.write(JSON.stringify(out)); });") % (url("doc.js"), url("geometry.js"), url("model.js"), url("text.js"))
-    done = json.loads(run_js(script, json.dumps(scene)))
+    done = json.loads(run_js(script, json.dumps({"scene": scene, "touched": touched})))
     scene["elements"] = [done.get(e["id"], e) for e in scene["elements"]]
 
 

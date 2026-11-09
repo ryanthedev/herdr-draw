@@ -4,7 +4,7 @@
 // excalidraw.com in headless Chromium: drawh labels sat in the top-left corner, Mermaid labels
 // with width 0 didn't show at all.)
 import { test, expect } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { Editor } from "../core/editor.js";
 import { alongPath, resolvedPoints } from "../core/geometry.js";
@@ -107,4 +107,22 @@ test("drawh grows a shape to fit its label, as the pane does when a person types
     expect(host.height).toBeCloseTo(labelHostHeight(label, host), 6);
     expect(host.height).toBeGreaterThan(60);
   }
+});
+
+test("drawh leaves alone what it didn't touch (an excalidraw.com arrow aimed off-center, a snug shape)", () => {
+  const f = `${mkdtempSync(`${tmpdir()}/drawh-`)}/b.excalidraw`;
+  const scene = JSON.parse(readFileSync(`${ROOT}test/fixtures/excalidraw-com.excalidraw`, "utf8"));
+  const a1 = scene.elements.find(e => e.id === "a1");
+  a1.startBinding.focus = 0.4; a1.points = [[0, 0], [108, 30]]; a1.height = 30;   // as excalidraw.com aims one off-center
+  const r1 = scene.elements.find(e => e.id === "r1"); r1.height = 40;              // smaller than our label padding wants
+  writeFileSync(f, JSON.stringify(scene));
+  drawh("add", f, "rect", "--at", "9999,9999", "--id", "NEW");
+  const after = JSON.parse(readFileSync(f, "utf8"));
+  for (const id of ["a1", "r1", "e1", "l1"]) {
+    const was = scene.elements.find(e => e.id === id), now = after.elements.find(e => e.id === id);
+    expect(now).toEqual(was);
+  }
+  drawh("move", f, "r1", "--by", "0,10");                                           // touched now: its arrow follows
+  const moved = JSON.parse(readFileSync(f, "utf8"));
+  expect(moved.elements.find(e => e.id === "a1").version).toBeGreaterThan(a1.version);
 });

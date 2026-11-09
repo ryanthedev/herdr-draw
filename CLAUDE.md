@@ -33,7 +33,7 @@ Herdr-draw data lives where Excalidraw keeps foreign data: `customData.{layer,z,
 
 ## Dev loop
 
-- `bun test` (131 tests). `drawh mermaid` runs core/mermaid.js through node (or bun), so agents and the pane lay out alike. Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
+- `bun test` (132 tests). `drawh mermaid` runs core/mermaid.js through node (or bun), so agents and the pane lay out alike. Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
 - `scripts/dev-sync.sh` builds `build/herdr-draw` (adapter + core + svg + drawh) and installs a **copy** into `~/.config/herdr-app/mods/herdr-draw`.
 - See the real window only with `herdr-app shot` (passive). **Never drive the person's mouse or keyboard** to test (theGrid input tools land in whatever app is focused).
 
@@ -82,7 +82,7 @@ sent only to that window's id; quit it by its pid when done.
   We choose sides ourselves and never read `fixedPoint` back.
 - excalidraw.com draws from stored geometry: labels from their own x/y/width/height, arrows from their points. We derive
   both, so `fileScene()` (core/geometry.js) writes the derived label boxes on every save, and drawh runs core `settle` +
-  `fileScene` through node on every save (so drawh needs node or bun for nearly every write, ~0.2 s). An older board's
+  `fileScene` through node on every save, re-routing/growing only what that run changed plus arrows bound to it (so drawh needs node or bun for nearly every write, ~0.2 s). An older board's
   first save from the pane rewrites its label boxes with no version bumps: expected, not a dirty pane. Check with `node scripts/excalidraw-probe.mjs BOARD OUT.png [ID]` (headless).
 - Images: `image` elements point at `files[fileId]` (base64 data URLs, ids are SHA-1 of the bytes); ops carry an add-only `files` map.
   `image()` loads only paths under `appHome()` (`$HERDR_APP_HOME` in a test window, not `home()`), so the pane decodes blobs into
