@@ -210,12 +210,12 @@ def run_js(script, stdin):
 
 def export_svg(scene, scale, dark, raster=False):
     """The pane's export: core/export.js crops and paints, svg.js writes the SVG."""
-    script = ("import { exportScene, boardTheme, DARK } from %s; import { Doc } from %s; import { toSvg } from %s;"
+    script = ("import { exportScene, boardTheme, DARK } from %s; import { Doc } from %s; import { toSvg, RASTER_FACES } from %s;"
               "let s = ''; process.stdin.on('data', d => s += d); process.stdin.on('end', () => {"
               " const doc = new Doc(JSON.parse(s)); const theme = %s ? DARK : boardTheme(doc.appState);"
-              " const x = exportScene(doc, theme, { scale: %s, maxPixels: 4096 }); process.stdout.write(toSvg(x.items, { ...x, svgImages: %s })); });") % (
+              " const x = exportScene(doc, theme, { scale: %s, maxPixels: 4096 }); process.stdout.write(toSvg(x.items, { ...x, svgImages: %s, faces: %s ? null : RASTER_FACES })); });") % (
         json.dumps("file://" + os.path.join(core_dir(), "export.js")), json.dumps("file://" + os.path.join(core_dir(), "doc.js")),
-        json.dumps("file://" + svg_module()), "true" if dark else "false", json.dumps(float(scale)), "false" if raster else "true")
+        json.dumps("file://" + svg_module()), "true" if dark else "false", json.dumps(float(scale)), "false" if raster else "true", "false" if raster else "true")
     return run_js(script, json.dumps(scene))
 
 

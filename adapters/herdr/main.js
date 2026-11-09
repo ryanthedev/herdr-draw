@@ -17,7 +17,7 @@ import { paintScene } from "./core/render.js";
 import { LibraryStore } from "./library-store.js";
 import { FONT_FAMILY } from "./core/style.js";
 import { isShape, isLabel, layerOf } from "./core/model.js";
-import { toSvg } from "./svg.js";
+import { toSvg, RASTER_FACES } from "./svg.js";
 import { FileStore } from "./store.js";
 import { readText, writeText } from "./io.js";
 
@@ -307,7 +307,9 @@ export default class Draw extends View {
       // The SVG to rasterize waits in the cache, not beside the board: the board's folder is watched.
       const dir = `${appHome()}/.cache/herdr-draw/tmp`, tmp = `${dir}/export-${Date.now()}.svg`;
       await exec("mkdir", ["-p", dir]);
-      await writeText(tmp, toSvg(big.items, { ...big, svgImages: false }), null);   // see toSvg: no nested SVGs for sips
+      // See toSvg: no nested SVGs for sips, and one font per class (the pane's own faces), which sips can find.
+      const faces = { ...RASTER_FACES, hand: this.face("hand") ?? RASTER_FACES.hand, mono: this.face("mono") ?? RASTER_FACES.mono };
+      await writeText(tmp, toSvg(big.items, { ...big, svgImages: false, faces }), null);
       const r = await exec("sh", ["-c", 'sips -s format png "$1" --out "$2" >/dev/null 2>&1; s=$?; rm -f "$1"; exit $s', "png-export", tmp, `${base}.png`]);
       if (r.code !== 0) throw new Error(`sips couldn't make the PNG (${r.stderr || r.code})`);
       this.flash = `exported ${name(base)}.svg + .png`;

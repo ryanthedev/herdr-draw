@@ -25,6 +25,9 @@ const FACES = {
   mono: "'Cascadia Code', Menlo, Consolas, monospace",
   sans: "Helvetica, Arial, sans-serif",
 };
+// For SVGs that sips rasterizes: it uses only the first family of a list and falls back to sans if that
+// one isn't installed, so name one face per class that macOS ships (the pane passes the faces it draws with).
+export const RASTER_FACES = { hand: "Chalkboard SE", mono: "Menlo", sans: "Helvetica" };
 
 // Only base64 raster/SVG data URLs reach an href: a board's `files` are untrusted.
 // (An SVG inside <image> can't run script.)
@@ -45,7 +48,8 @@ function rasterBytes(url) {
 
 // `svgImages: false` for anything a rasterizer will read (PNG export): an embedded SVG picture is the
 // board's content, and its own links (file://, http) could make sips fetch them. Browsers don't.
-export function toSvg(items, { width, height, background, font = FACES.sans, files = {}, scale = 1, svgImages = true } = {}) {
+export function toSvg(items, { width, height, background, font = FACES.sans, files = {}, scale = 1, svgImages = true, faces = null } = {}) {
+  const face = k => (faces?.[k] ? `'${String(faces[k]).replace(/['"\\<>&]/g, "")}'` : FACES[k]);
   width = num(width, 800); height = num(height, 600); scale = num(scale, 1) > 0 ? num(scale, 1) : 1; const base = esc(font ?? FACES.sans);
   const px = v => +(v * scale).toFixed(2);
   const out = [`<svg xmlns="http://www.w3.org/2000/svg" width="${px(width)}" height="${px(height)}" viewBox="0 0 ${width} ${height}">`];
@@ -67,7 +71,7 @@ export function toSvg(items, { width, height, background, font = FACES.sans, fil
       // Rotated text turns about its center (adapters without text rotation draw it upright).
       const deg = num(it.angle) * 180 / Math.PI;
       if (deg) out.push(`<g transform="rotate(${deg.toFixed(2)} ${num(it.cx).toFixed(1)} ${num(it.cy).toFixed(1)})">`);
-      const font = it.font && FACES[it.font] ? esc(FACES[it.font]) : base;
+      const font = it.font && FACES[it.font] ? esc(face(it.font)) : base;
       const size = num(it.size, 16), lines = String(it.text).split("\n"), lh = size * num(it.lineHeight, 1.25), [c, o] = color(it.color, op);
       it = { ...it, size, x: num(it.x), y: num(it.y), box: it.box && { x: num(it.box.x), y: num(it.box.y), w: num(it.box.w), h: num(it.box.h) } };
       if (it.box) {

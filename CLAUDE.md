@@ -33,7 +33,7 @@ Herdr-draw data lives where Excalidraw keeps foreign data: `customData.{layer,z,
 
 ## Dev loop
 
-- `bun test` (132 tests). `drawh mermaid` runs core/mermaid.js through node (or bun), so agents and the pane lay out alike. Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
+- `bun test` (133 tests). `drawh mermaid` runs core/mermaid.js through node (or bun), so agents and the pane lay out alike. Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
 - `scripts/dev-sync.sh` builds `build/herdr-draw` (adapter + core + svg + drawh) and installs a **copy** into `~/.config/herdr-app/mods/herdr-draw`.
 - See the real window only with `herdr-app shot` (passive). **Never drive the person's mouse or keyboard** to test (theGrid input tools land in whatever app is focused).
 
@@ -96,6 +96,8 @@ sent only to that window's id; quit it by its pid when done.
   macOS `sips` (verified live; QuickLook crops to a square). Raster exports pass `svgImages: false` to `toSvg`: only pictures whose
   bytes match their declared PNG/JPEG/GIF/WebP type go to sips, so a board's SVG can't make it fetch files or URLs.
   Give an SVG background explicit width/height, never `100%`: sips sized it from the pixel size and left a 2× PNG mostly black.
+  sips uses only the **first** family of a `font-family` list (sans if it's missing), so raster SVGs name one face per class
+  (`RASTER_FACES`, or the pane's own `face()`); plain SVG exports keep the full fallback lists.
 - Library file: `<appHome>/herdr-draw/library.excalidrawlib` (pane and `drawh lib`; `HERDR_APP_HOME` picks the test home's).
   Items carry their pictures' `files` (a herdr extension: excalidraw.com shows library pictures as placeholders). Sidebar
   previews draw paths only, no text or pictures.

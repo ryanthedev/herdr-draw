@@ -5,7 +5,7 @@ For the next session picking this up. Read `CLAUDE.md` first (architecture, port
 ## Where it stands
 
 - All work is committed locally on `main` and **not pushed** (no remote yet). Latest: third session (see `git log`).
-- `bun test`: 132 tests, all passing. Snapshots in `test/out/*.png`.
+- `bun test`: 133 tests, all passing. Snapshots in `test/out/*.png`.
 - The person's install (`~/.config/herdr-app/mods/herdr-draw`, and `drawh` on PATH via `~/.local/bin/drawh`) is **behind**: see below.
 
 Built so far (commit order):
@@ -104,6 +104,9 @@ drags that element down 150 px. Use it for any "does it open right in excalidraw
    family now refits its shape too, and free text takes its new width on a font or size change. Verified live: sans, hand and mono labels
    wrap to their box and the boxes fit. Caveats: if Excalifont/Virgil is installed the pane's hand face changes and the hand
    table (Chalkboard SE) is off by a few %; a person's terminal mono font wider than 0.6 em would overflow slightly.
+   PNG export used to draw hand and mono labels in plain sans (sips takes only the first font in a list; Excalifont isn't
+   installed); raster exports now name one installed face per class. `drawh`'s save pass settles only what that run changed
+   (plus arrows bound to it), so an excalidraw.com arrow aimed off-center isn't re-aimed by an unrelated write.
    `wrapLines` is guarded against zero/broken widths (an automated security review flagged a possible endless loop).
 6. Small, open: excalidraw.com puts an arrow label at the route's middle point (on a 3-point elbow, the bend); we put it
    halfway along the length, so the label jumps once someone edits the arrow there. Free text written by drawh keeps

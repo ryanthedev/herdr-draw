@@ -5,7 +5,7 @@ import { rasterize, closeRaster } from "./harness/raster.js";
 import { exportScene, paintedBox, LIGHT } from "../core/export.js";
 import { Doc } from "../core/doc.js";
 import { emptyScene } from "../core/model.js";
-import { toSvg } from "../adapters/svg/svg.js";
+import { toSvg, RASTER_FACES } from "../adapters/svg/svg.js";
 
 const exportSvg = (doc, theme, opts) => { const s = exportScene(doc, theme, opts); return toSvg(s.items, s); };
 
@@ -105,4 +105,21 @@ test("a raster export keeps a picture only if its bytes match its declared forma
   for (const k of ["png", "jpg", "gif", "webp"]) expect(raster).toContain(files[k].dataURL);
   for (const k of ["fake", "badwebp"]) expect(raster).not.toContain(files[k].dataURL);
   expect(toSvg(items, { files })).toContain(files.fake.dataURL);   // the SVG export doesn't sniff: a browser's <image> is safe
+});
+
+// sips (the PNG step) uses only the first family in a font-family list and falls back to sans when it
+// isn't installed (checked 2026-11-08: Excalifont-first hand labels came out in Helvetica), so raster
+// exports name one installed face per class.
+test("raster exports name one installed face per font class; SVG exports keep the full lists", () => {
+  const items = [
+    { t: "text", id: "h", font: "hand", x: 0, y: 0, text: "hi", size: 20, color: "#000", align: "left" },
+    { t: "text", id: "m", font: "mono", x: 0, y: 40, text: "hi", size: 20, color: "#000", align: "left" },
+  ];
+  const svg = toSvg(items, { width: 100, height: 100 });
+  expect(svg).toContain("Excalifont, Virgil");
+  const raster = toSvg(items, { width: 100, height: 100, faces: RASTER_FACES });
+  expect(raster).toContain(`font-family="'Chalkboard SE'"`);
+  expect(raster).toContain(`font-family="'Menlo'"`);
+  expect(raster).not.toContain("Excalifont");
+  expect(toSvg(items, { faces: { ...RASTER_FACES, mono: "BerkeleyMono Nerd Font" } })).toContain("BerkeleyMono Nerd Font");
 });
