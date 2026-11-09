@@ -701,8 +701,7 @@ export class Editor {
   cloneSelection(dx, dy, selectCopies = true) {
     const els = this.selected(); if (!els.length) return [];
     const map = new Map(), groupMap = new Map(), out = [];
-    const all = [...els];
-    for (const el of els) { const l = isShape(el) && this.doc.labelOf(el); if (l) all.push(l); }
+    const all = this.withLabels(els);
     for (const el of all) map.set(el.id, newId());
     this.transact(tx => {
       for (const el of all) {
@@ -719,10 +718,17 @@ export class Editor {
     return out;
   }
 
+  // Elements plus the labels of the shapes and arrows among them (a label goes where its host goes).
+  withLabels(els) {
+    const all = [...els], ids = new Set(els.map(e => e.id));
+    for (const el of els) { const l = (isShape(el) || isLinear(el)) && this.doc.labelOf(el); if (l && !ids.has(l.id)) { all.push(l); ids.add(l.id); } }
+    return all;
+  }
+
   copy() {
     const els = this.selected(); if (!els.length) return null;
-    const all = [...els]; for (const el of els) { const l = isShape(el) && this.doc.labelOf(el); if (l) all.push(l); }
-    // Excalidraw's clipboard format, so pasting into excalidraw.com works too.
+    const all = fileScene(this.doc, { elements: this.withLabels(els) }).elements;
+    // Excalidraw's clipboard format (label boxes as the file has them), so pasting into excalidraw.com works too.
     const files = {};
     for (const el of all) if (el.type === "image" && this.doc.files[el.fileId]) files[el.fileId] = this.doc.files[el.fileId];
     this.clipboard = JSON.stringify({ type: "excalidraw/clipboard", elements: all.map(clone), files });
@@ -804,8 +810,9 @@ export class Editor {
   // The selection as a library item (labels and picture files included); null if nothing is selected.
   libraryItem(name) {
     const els = this.selected().filter(e => !isLabel(e)); if (!els.length) return null;
-    const all = [...els]; for (const el of els) { const l = isShape(el) && this.doc.labelOf(el); if (l) all.push(l); }
-    return itemFromElements(all, { name, files: this.doc.files, now: this.clock() });
+    const all = this.withLabels(els);
+    // As the file has them (label boxes, elbow fixedPoints), so the item opens right in excalidraw.com too.
+    return itemFromElements(fileScene(this.doc, { elements: all }).elements, { name, files: this.doc.files, now: this.clock() });
   }
   insertLibraryItem(item, at) { return this.insertElements(item?.elements, item?.files, at); }
 

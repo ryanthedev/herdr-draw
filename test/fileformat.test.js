@@ -68,3 +68,22 @@ test("labels follow their shape when it moves", () => {
   t.drag([r.x + 5, r.y + 5], [r.x + 205, r.y + 105]);
   expectCentered(t.ed.scene());
 });
+
+test("library items carry arrow labels and the label boxes excalidraw.com paints", () => {
+  const t = setup();
+  t.ed.paste("graph LR\n  A[Start] -->|next| B[Stop]", { x: 400, y: 300 });   // pasted graph stays selected
+  const item = t.ed.libraryItem("flow");
+  expect(item.elements.some(e => e.type === "text" && e.text === "next")).toBe(true);
+  expectCentered({ elements: item.elements });
+});
+
+test("copy and duplicate take an arrow's label along", () => {
+  const t = setup();
+  t.ed.paste("graph LR\n  A[Start] -->|next| B[Stop]", { x: 400, y: 300 });
+  const clip = JSON.parse(t.ed.copy());
+  const arrow = clip.elements.find(e => e.type === "arrow");
+  expect(clip.elements.find(e => e.text === "next").containerId).toBe(arrow.id);
+  expectCentered({ elements: clip.elements });
+  t.ed.cloneSelection(20, 20);
+  expect(t.live().filter(e => e.type === "text" && e.text === "next")).toHaveLength(2);
+});

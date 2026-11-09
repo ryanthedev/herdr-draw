@@ -5,7 +5,7 @@ For the next session picking this up. Read `CLAUDE.md` first (architecture, port
 ## Where it stands
 
 - All work is committed locally on `main` and **not pushed** (no remote yet). Latest: library (see `git log`).
-- `bun test`: 121 tests, all passing. Snapshots in `test/out/*.png`.
+- `bun test`: 123 tests, all passing. Snapshots in `test/out/*.png`.
 - Installed into `~/.config/herdr-app/mods/herdr-draw` (via `scripts/dev-sync.sh`); `drawh` is on PATH (`~/.local/bin/drawh` → the installed copy).
 
 Built so far (commit order):
@@ -52,7 +52,8 @@ Window `31533` / `~/.cache/eht` belongs to the engram agent: leave it alone.
    pane's own save of a >1 MiB board (tested headless with real shell commands only). theGrid key presses to the test window
    (id from `window_find --pid`) did not reach the pane, even after `herdr-app do herdr-draw.focus`; find another way before retrying.
    Also open: binding arrows to images (only shapes bind), and a board over 8 MiB can't be read (exec's output cap).
-   Unverified: opening a board with images in excalidraw.com (the format follows Excalidraw's `image` + `files`).
+   Verified (2026-11-08, probe): a drawh board with a PNG and a JPEG opens in excalidraw.com with both pictures, and an arrow
+   bound to a picture follows it when dragged there.
    The image cache is named by the SHA-1 of the decoded bytes, never by a board's file id (a hostile board can't alias another picture).
    Watch out: this shell had `HERDR_APP_HOME=~/.cache/hdt` set, so `scripts/dev-sync.sh` installed into the test home; use
    `env -u HERDR_APP_HOME sh scripts/dev-sync.sh` to install for the person. (t2r, who made `0e27966`, has stood down: one writer now.)
@@ -63,7 +64,9 @@ Window `31533` / `~/.cache/eht` belongs to the engram agent: leave it alone.
 3. ~~Library~~ done (2026-11-08): sidebar "Library" (previews, click inserts, + saves the selection, ✕ removes, drop a
    `.excalidrawlib` to merge) and `drawh lib ls|add|insert|import|rm`. Verified live: `drawh lib add` showed up in the open
    pane's panel with previews, and `drawh lib insert` landed on the board with labels. Headless only: clicking a tile, the "+"
-   button, ✕, and dropping a library (keys and clicks don't reach the test pane). Unverified: our library in excalidraw.com.
+   button, ✕, and dropping a library (keys and clicks don't reach the test pane). Verified (probe): our `.excalidrawlib` imports
+   into excalidraw.com's library, both items, the picture item with its file (its tile there is blank). Library items, copy and
+   duplicate now take arrow labels along (they were left behind) and carry the file's label boxes.
    Also: arrows now bind to images and elbows route around them; paste gives copies fresh group ids.
    Small: library previews are cached with the theme colors of the moment; a theme change shows old colors until the item changes.
 4. ~~Elbow fidelity~~ done (2026-11-08, third session): elbows write Excalidraw's `binding.fixedPoint` (fraction of the bound
