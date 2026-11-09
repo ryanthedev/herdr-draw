@@ -4,7 +4,7 @@
 // PNG is the adapters' job (rasterize that SVG): the core has no pixels.
 
 import { paintScene } from "./render.js";
-import { CHAR_W } from "./text.js";
+import { lineWidth } from "./text.js";
 
 // What a shared picture usually looks like: Excalidraw's white page and dark ink.
 export const LIGHT = { fg: "#1e1e1e", bg: "#ffffff", accent: "#6965db", dim: "#868e96" };
@@ -23,7 +23,7 @@ export function paintedBox(doc, theme, items = paintScene(doc, { x: 0, y: 0, sca
     } else if (it.t === "text") {
       if (it.box) { add(it.box.x, it.box.y); add(it.box.x + it.box.w, it.box.y + it.box.h); continue; }
       const lines = String(it.text ?? "").split("\n"), size = it.size ?? 16;
-      add(it.x, it.y); add(it.x + Math.max(...lines.map(l => l.length * size * (CHAR_W[it.font] ?? 0.6))), it.y + lines.length * size * (it.lineHeight ?? 1.25));
+      add(it.x, it.y); add(it.x + Math.max(...lines.map(l => lineWidth(l, size, it.font))), it.y + lines.length * size * (it.lineHeight ?? 1.25));
     } else if (it.t === "image") {
       const a = it.angle || 0, c = Math.cos(a), s = Math.sin(a);
       for (const [dx, dy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {

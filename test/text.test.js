@@ -32,6 +32,18 @@ test("textWidth: each font family at its own width; mono is exact", () => {
   expect(wrapLines(s, 130, 20, 3).length).toBeGreaterThan(wrapLines(s, 130, 20, 2).length);
 });
 
+// Live, 2026-11-08: this sentence at 40px in the isolated Herdr pane (zoom 1.2, 2x display) measured
+// 1944 / 1979 / 2462 device px of ink for sans / hand / mono, i.e. 0.471 / 0.479 / 0.596 per char.
+test("textWidth matches the pane's rendered fonts, glyph by glyph", () => {
+  const s = "The quick brown fox jumps over the lazy dog", per = ff => textWidth(s, 40, ff) / (40 * s.length);
+  expect(per(2)).toBeCloseTo(0.471, 1); expect(Math.abs(per(2) - 0.471)).toBeLessThan(0.01);
+  expect(Math.abs(per(5) - 0.479)).toBeLessThan(0.01);
+  expect(per(3)).toBeCloseTo(0.6, 6);
+  expect(textWidth("MMMM", 20, 2)).toBeGreaterThan(3 * textWidth("iiii", 20, 2));   // glyphs, not a flat average
+  expect(textWidth("漢字", 20, 2)).toBeCloseTo(40, 6);                                // wide chars take an em
+  expect(textWidth("é", 20, 2)).toBeGreaterThan(0);
+});
+
 test("a mono label's file box is as wide as mono text", () => {
   const t = setup();
   t.key("r"); t.drag([100, 100], [400, 160]);
@@ -59,9 +71,9 @@ test("a long label wraps inside its box and the box grows to fit", () => {
 
 test("diamonds and ellipses wrap narrower than rectangles", () => {
   const t = setup();
-  for (const [k, x] of [["r", 50], ["d", 300], ["o", 550]]) {
-    t.key(k); t.drag([x, 100], [x + 200, 200]);
-    t.dblclick([x + 100, 150]); t.type("one two three four five six");
+  for (const [k, x] of [["r", 10], ["d", 310], ["o", 610]]) {   // 280 wide: the rectangle fits the text on one line
+    t.key(k); t.drag([x, 100], [x + 280, 200]);
+    t.dblclick([x + 140, 150]); t.type("one two three four five six");
   }
   const n = type => { const host = t.byType(type)[0]; return labelLines(t.ed.doc.labelOf(host), host).length; };
   expect(n("diamond")).toBeGreaterThan(n("rectangle"));
