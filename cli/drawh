@@ -81,7 +81,7 @@ def base(kind, **kw):
 def text_el(text, x, y, size=20, container=None, color=COLORS["default"]):
     text = text.replace("\\n", "\n")   # `--label "two\nlines"` from a shell
     lines = text.split("\n")
-    w, h = max(len(l) for l in lines) * size * 0.56, len(lines) * size * 1.25
+    w, h = max(len(l) for l in lines) * size * 0.5, len(lines) * size * 1.25   # core/text.js CHAR_W.sans (font 2)
     return base("text", x=x, y=y, width=w, height=h, text=text, originalText=text, fontSize=size, fontFamily=2,
                 textAlign="center" if container else "left", verticalAlign="middle" if container else "top",
                 containerId=container, lineHeight=1.25, autoResize=True, baseline=int(size * 0.9),

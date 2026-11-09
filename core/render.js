@@ -6,10 +6,10 @@
 //   { t: "image", fileId, mimeType, x, y, w, h, angle, cx, cy, opacity? }   pixels: doc.files[fileId]
 // Colors arrive as #rrggbb or #rrggbbaa; the theme decides what "default ink" is.
 
-import { DEFAULT_STROKE, isShape, isLinear, isLabel } from "./model.js";
+import { DEFAULT_STROKE, isShape, isLinear, isLabel, textSize } from "./model.js";
 import { bbox, resolvedPoints, toWorld, angleOf, centerOf, alongPath } from "./geometry.js";
 import { animState } from "./anim.js";
-import { labelLines } from "./text.js";
+import { labelLines, textWidth } from "./text.js";
 import { cornerRadius, roundPolygon, fillLines, arrowheadCmds, fontClass } from "./style.js";
 
 export function rng(seed) {
@@ -115,14 +115,14 @@ export function paintElement(doc, el, P, view, theme, out, opts = {}) {
       const box = doc.get(el.containerId); if (!box) return;
       let b = bbox(box);
       if (isLinear(box)) {   // a line's label sits halfway along its path (elbows included)
-        const m = alongPath(resolvedPoints(doc, box)), lw = Math.max(40, String(el.text).length * el.fontSize * 0.6), lh = el.fontSize * 1.4;
+        const m = alongPath(resolvedPoints(doc, box)), lw = Math.max(40, textSize(el.text, el.fontSize, 1.25, el.fontFamily).w), lh = el.fontSize * 1.4;
         b = { x: m[0] - lw / 2, y: m[1] - lh / 2, w: lw, h: lh };
       }
       const [x0, y0] = Q(b.x, b.y), [x1, y1] = Q(b.x + b.w, b.y + b.h);
       const color = box.backgroundColor !== "transparent" && (!box.fillStyle || box.fillStyle === "solid") && INK.has(el.strokeColor) ? "#1e1e1e" : ink(el.strokeColor, theme);
       const text = isShape(box) ? labelLines(el, box).join("\n") : el.text;   // labels wrap to their shape
       if (isLinear(box)) {   // on a line: a patch of background behind the text, like Excalidraw's gap
-        const lines = String(text).split("\n"), s2 = el.fontSize * s, w = Math.max(...lines.map(l => l.length)) * s2 * 0.56 + 10, h = lines.length * s2 * (el.lineHeight ?? 1.25) + 4;
+        const lines = String(text).split("\n"), s2 = el.fontSize * s, w = Math.max(...lines.map(l => textWidth(l, s2, el.fontFamily))) + 10, h = lines.length * s2 * (el.lineHeight ?? 1.25) + 4;
         const [mx, my] = Q(b.x + b.w / 2, b.y + b.h / 2);
         out.push({ t: "path", id: el.id + ":bg", cmds: [["M", mx - w / 2, my - h / 2], ["L", mx + w / 2, my - h / 2], ["L", mx + w / 2, my + h / 2], ["L", mx - w / 2, my + h / 2]], fill: theme.bg, opacity });
       }

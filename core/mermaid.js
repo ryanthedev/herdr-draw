@@ -11,7 +11,7 @@
 import { makeElement } from "./model.js";
 import { edgePoint } from "./geometry.js";
 import { elbowRoute } from "./elbow.js";
-import { labelHostHeight, wrapLines, CHAR_W } from "./text.js";
+import { labelHostHeight, wrapLines, textWidth } from "./text.js";
 
 const SHAPES = [
   // [open, close, element type], longest openers first so "((" wins over "(".
@@ -97,8 +97,8 @@ const GAP_RANK = 90, GAP_NODE = 50, PAD_FRAME = 30;
 
 function nodeSize(n) {
   const fs = 20, maxW = 180;
-  const lines = wrapLines(n.label, maxW, fs);
-  const textW = Math.max(...lines.map(l => l.length)) * fs * CHAR_W;
+  const lines = wrapLines(n.label, maxW, fs, 2);
+  const textW = Math.max(...lines.map(l => textWidth(l, fs, 2)));
   let w = Math.max(120, Math.min(240, textW + 40)), h = Math.max(60, lines.length * fs * 1.25 + 28);
   if (n.type === "diamond") { w = Math.max(w * 1.5, 140); h = Math.max(h * 1.6, 90); }
   if (n.type === "ellipse") { w *= 1.25; h *= 1.25; }

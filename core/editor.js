@@ -643,7 +643,7 @@ export class Editor {
     const t = this.text; if (!t) return null;
     const el = t.draft ?? this.doc.get(t.id); if (!el) return null;
     const host = el.containerId ? this.doc.get(el.containerId) : t.frame ? el : null;
-    const b = host ? bbox(host) : { x: el.x, y: el.y, w: Math.max(200, textSize(t.value || "M", el.fontSize).w), h: el.fontSize * 1.4 };
+    const b = host ? bbox(host) : { x: el.x, y: el.y, w: Math.max(200, textSize(t.value || "M", el.fontSize, 1.25, el.fontFamily).w), h: el.fontSize * 1.4 };
     const a = this.toScreen(b), s = this.view.scale;
     if (t.frame) return { x: a.x, y: a.y - 26, w: Math.max(160, b.w * s), h: 24, size: 13, align: "left" };
     const lines = Math.max(1, String(t.value).split("\n").length), h = Math.max(36, lines * el.fontSize * s * 1.3 + 14);
@@ -665,7 +665,7 @@ export class Editor {
       const el = t.isNew ? tx.add(t.draft) : tx.get(t.id);
       if (!el) return;
       el.text = el.originalText = value;
-      const s = textSize(value, el.fontSize, el.lineHeight); el.width = s.w; el.height = s.h;
+      const s = textSize(value, el.fontSize, el.lineHeight, el.fontFamily); el.width = s.w; el.height = s.h;
       if (el.containerId) {
         const host = tx.get(el.containerId);
         if (host && t.isNew) host.boundElements = (host.boundElements ?? []).concat([{ id: el.id, type: "text" }]);

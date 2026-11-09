@@ -1,5 +1,5 @@
 import { test, expect, afterAll } from "bun:test";
-import { wrapLines, labelLines } from "../core/text.js";
+import { wrapLines, labelLines, textWidth } from "../core/text.js";
 import { setup, THEME } from "./harness/fixture.js";
 import { closeRaster } from "./harness/raster.js";
 import { bbox } from "../core/geometry.js";
@@ -7,12 +7,33 @@ import { bbox } from "../core/geometry.js";
 afterAll(closeRaster);
 
 test("wrapLines: word wrap, explicit newlines, long words broken", () => {
-  // 20px font → ~11.2px per char; 120px fits 10 chars.
-  expect(wrapLines("the quick brown fox jumps", 120, 20)).toEqual(["the quick", "brown fox", "jumps"]);
-  expect(wrapLines("a\nb", 500, 20)).toEqual(["a", "b"]);
-  expect(wrapLines("abcdefghijklmnopqrstuvwxyz", 120, 20)).toEqual(["abcdefghij", "klmnopqrst", "uvwxyz"]);
-  expect(wrapLines("", 100, 20)).toEqual([""]);
-  expect(wrapLines("is the signature valid", 90, 20)).toEqual(["is the", "signature", "valid"]);   // 9 chars on an 8-char line stays whole
+  // Mono (fontFamily 3) at 20px is 12px per char: 120px fits 10 chars.
+  expect(wrapLines("the quick brown fox jumps", 120, 20, 3)).toEqual(["the quick", "brown fox", "jumps"]);
+  expect(wrapLines("a\nb", 500, 20, 3)).toEqual(["a", "b"]);
+  expect(wrapLines("abcdefghijklmnopqrstuvwxyz", 120, 20, 3)).toEqual(["abcdefghij", "klmnopqrst", "uvwxyz"]);
+  expect(wrapLines("", 100, 20, 3)).toEqual([""]);
+  expect(wrapLines("is the signature valid", 90, 20, 3)).toEqual(["is the", "signature", "valid"]);   // 9 chars on a 7-char line stays whole
+});
+
+// Measured 2026-11-08 in headless Chromium, average width per char / font size: system UI sans 0.41-0.47,
+// Chalkboard SE / Comic Sans 0.47-0.53, Menlo / Berkeley Mono 0.60. The old single 0.56 made mono overflow.
+test("textWidth: each font family at its own width; mono is exact", () => {
+  expect(textWidth("MMMM", 20, 3)).toBeCloseTo(48, 6);
+  const s = "Validate the payload", sans = textWidth(s, 20, 2), hand = textWidth(s, 20, 5), mono = textWidth(s, 20, 3);
+  expect(sans).toBeLessThan(hand); expect(hand).toBeLessThan(mono);
+  expect(sans / (20 * s.length)).toBeGreaterThan(0.42);   // never much narrower than the real font: text must fit
+  expect(wrapLines(s, 130, 20, 3).length).toBeGreaterThan(wrapLines(s, 130, 20, 2).length);
+});
+
+test("a mono label's file box is as wide as mono text", () => {
+  const t = setup();
+  t.key("r"); t.drag([100, 100], [400, 160]);
+  t.dblclick([250, 130]); t.type("abcdefghij"); t.key("escape");
+  const [r] = t.byType("rectangle");
+  t.ed.select([r.id]); t.ed.setStyle({ fontFamily: 3 });
+  const l = t.ed.scene().elements.find(e => e.type === "text");
+  expect(l.fontFamily).toBe(3);
+  expect(l.width).toBeCloseTo(10 * 0.6 * l.fontSize, 6);
 });
 
 test("a long label wraps inside its box and the box grows to fit", () => {

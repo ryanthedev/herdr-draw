@@ -5,6 +5,8 @@
 //
 // No imports from Herdr, the DOM or Node: this module runs everywhere.
 
+import { textWidth } from "./text.js";
+
 export const DEFAULT_STROKE = "#1e1e1e";
 export const BASE_LAYER = "base";
 
@@ -76,7 +78,7 @@ export function layersOf(appState) {
 }
 
 // Text size estimate: there is no text measuring that works in every adapter.
-export function textSize(text, fontSize, lineHeight = 1.25) {
+export function textSize(text, fontSize, lineHeight = 1.25, fontFamily = 2) {
   const lines = String(text ?? "").split("\n");
-  return { w: Math.max(1, ...lines.map(l => l.length)) * fontSize * 0.56, h: lines.length * fontSize * lineHeight };
+  return { w: Math.max(fontSize * 0.5, ...lines.map(l => textWidth(l, fontSize, fontFamily))), h: lines.length * fontSize * lineHeight };
 }

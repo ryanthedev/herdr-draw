@@ -11,7 +11,7 @@ export function bbox(el) {
     return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
   }
   if (el.type === "text" && !el.containerId) {
-    const s = textSize(el.text, el.fontSize, el.lineHeight);
+    const s = textSize(el.text, el.fontSize, el.lineHeight, el.fontFamily);
     return { x: el.x, y: el.y, w: Math.max(el.width, s.w), h: Math.max(el.height, s.h) };
   }
   const x = Math.min(el.x, el.x + el.width), y = Math.min(el.y, el.y + el.height);
@@ -266,7 +266,7 @@ function labelBox(doc, label, host) {
     const pts = resolvedPoints(doc, host); if (pts.length < 2) return null;
     const m = alongPath(pts); c = { x: m[0], y: m[1] }; lines = String(label.text ?? "").split("\n");
   } else { c = center(bbox({ ...host, angle: 0 })); lines = labelLines(label, host); }
-  const width = Math.max(1, ...lines.map(l => textSize(l, label.fontSize, lh).w)), height = lines.length * label.fontSize * lh;
+  const width = Math.max(1, ...lines.map(l => textSize(l, label.fontSize, lh, label.fontFamily).w)), height = lines.length * label.fontSize * lh;
   return { x: c.x - width / 2, y: c.y - height / 2, width, height };
 }
 
