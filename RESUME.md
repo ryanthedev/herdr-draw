@@ -76,8 +76,8 @@ boards open in excalidraw.com in Safari; a canvas adapter on core (touch → poi
   `global`). Their globals take ⌘A ⌘D ⌘[ ⌘] ⌘= ⌘- ⌘0 ⌘⇧L (⌘G in matrix). The board treats ⌃ like ⌘, so ⌃ works.
 - Live check: picker list verified in the test window; preview fix verified headless only (the person was back).
 - Keys: the pane reads keys.json and shows ⌃X for any ⌘X Herdr takes (`takenKeys`/`fitKeys`); ⌃ works everywhere ⌘ does.
-  Not done (the person's call): a `mod:herdr-draw` keys.json section would give ⌘A/⌘D/⌘[ ⌘]/zoom back inside boards only,
-  shadowing their agent/split keys there; the pane would then need to take those as nextCommand()s (focused copy only).
+  **Decided (2026-11-09): "keep ctrl, don't take my cmd keys."** No `mod:herdr-draw` keys.json section; ⌘ keys Herdr
+  takes stay on ⌃ inside boards. New board shortcuts use ⌘ keys free in their keys.json, or ⌃.
 - Frames as pages: side panel "Frames" (reading order, click to show one), PgDn/PgUp step and wrap.
 
 ## How to verify in real Herdr (never the person's window)
