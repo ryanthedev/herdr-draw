@@ -39,8 +39,19 @@ Herdr-draw data lives where Excalidraw keeps foreign data: `customData.{layer,z,
 
 ## Testing in a real Herdr window (never the person's)
 
-`open -g -n -a Herdr --env HERDR_APP_HOME=$HOME/.cache/hdt` starts a separate window on its own home
-(keep the path short: the socket path has a length limit). Give that home `shared.json`
+Start a separate window on its own home (keep the path short: the socket path has a length limit):
+
+```sh
+env -u CLAUDECODE -u CLAUDE_PID -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_CODE_SESSION_ID \
+    -u CLAUDE_CODE_SESSION_ATTENDED -u CLAUDE_CODE_ENTRYPOINT \
+    -u CLAUDE_CODE_MESSAGING_SOCKET -u CLAUDE_CODE_MESSAGING_TOKEN -u HC_TERMINAL_ID -u HC_SCOPE \
+  open -g -n -a Herdr --env HERDR_APP_HOME=$HOME/.cache/hdt
+```
+
+**Never launch a Herdr window (test or main) from a Claude shell without that `env -u`.** The
+window inherits the shell's environment and hands it to every terminal it starts. A Claude
+started there inherits `CLAUDE_CODE_CHILD_SESSION=1`, prints "Transcript saving is off", and can't
+be resumed (seen 2026-11-08 on t4t and t4v). Give that home `shared.json`
 `{"layout":"drawtest","frame.welcomed":"finished"}` and a `layouts/drawtest.json` whose root is a
 block with `{"mod":"herdr-draw","props":{"file":...}}`. Show the board as a layout block, never
 `tab.new`/`pane.split`: spaces and tabs are shared with the person's window through herdr-core.
