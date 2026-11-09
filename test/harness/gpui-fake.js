@@ -106,6 +106,8 @@ export function installFakes({ file, home }) {
       calls.exec.push([cmd, ...args]);
       if (calls.real?.(cmd, args)) {
         const r = Bun.spawnSync([cmd, ...args], { env: process.env });
+        // Herdr's exec caps output at 8 MiB (herdr.d.ts): a read that leans on more must fail here too.
+        if (r.stdout.length > 8 * 1024 * 1024) throw new Error("fake: exec output over 8 MiB");
         return { stdout: r.stdout.toString(), stderr: r.stderr.toString(), code: r.exitCode };
       }
       return { stdout: "", stderr: "", code: 0 };

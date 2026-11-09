@@ -194,7 +194,7 @@ test("screenshot of the adapter's own canvas output", async () => {
 const TINY = `${ROOT}test/fixtures/tiny.png`;
 const IMG_DIR = `${home}/.cache/herdr-draw/img`;
 // Let the image shell scripts really run (sips, shasum, base64); everything else stays recorded only.
-const realImages = () => { calls.real = (cmd, args) => ["mkdir", "test", "rm", "stat", "cat"].includes(cmd) || (cmd === "sh" && ["img-import", "img-cache", "big-write", "png-export"].includes(args[2])); };
+const realImages = () => { calls.real = (cmd, args) => ["mkdir", "test", "rm", "stat", "cat"].includes(cmd) || (cmd === "sh" && ["img-import", "img-cache", "big-write", "png-export"].includes(args[2])) || (cmd === "perl" && args[3] === "big-read"); };
 
 test("dropping a PNG puts it on the board, cached where image() can load it, and saved in the file", async () => {
   realImages();
@@ -269,6 +269,29 @@ test("a board over 1 MiB (a few photos) opens, saves, and still takes an agent's
   const after = ui.disk();
   expect(after.elements.find(e => e.id === "t1").x).toBe(900);
   expect(after.elements.some(e => e.type === "ellipse")).toBe(true);
+});
+
+test("a board over 8 MiB (exec's output cap) opens and saves, UTF-8 intact across its parts", async () => {
+  realImages();
+  const big = Buffer.alloc(7_200_000, 9).toString("base64");                 // ~9.6 MB of base64
+  // Multi-byte text all through the file, so some lands on every part boundary.
+  const texts = Array.from({ length: 400 }, (_, i) => ({ id: `t${i}`, type: "text", text: `é✓日本🎨 ${i} `.repeat(40), x: 0, y: i * 30, width: 200, height: 25, fontSize: 20, angle: 0, opacity: 100, version: 2, versionNonce: 1, isDeleted: false, strokeColor: "#1e1e1e", backgroundColor: "transparent", customData: { layer: "base", z: 2 + i } }));
+  const scene = { type: "excalidraw", version: 2, elements: [
+    { id: "photo", type: "image", fileId: "bigpic", x: 0, y: 0, width: 300, height: 200, angle: 0, opacity: 100, version: 2, versionNonce: 1, isDeleted: false, strokeColor: "transparent", backgroundColor: "transparent", customData: { layer: "base", z: 1 } },
+    ...texts,
+  ], appState: {}, files: { bigpic: { id: "bigpic", mimeType: "image/png", dataURL: `data:image/png;base64,${big}` } } };
+  writeFileSync(file, JSON.stringify(scene));
+  expect(readFileSync(file).length).toBeGreaterThan(8 * 1024 * 1024);
+  const ui = await open();
+  expect(ui.view.error).toBeNull();
+  for (const t of texts) expect(ui.view.ed.doc.get(t.id).text).toBe(t.text);
+  expect(ui.view.ed.doc.files.bigpic.dataURL.length).toBe(big.length + 22);
+  expect(readdirSync(`${home}/.cache/herdr-draw/tmp`)).toEqual([]);          // read parts cleaned up
+  ui.key("r"); ui.drag([500, 300], [600, 380]);
+  await ui.cx.flush();
+  const disk = ui.disk();
+  expect(disk.elements.some(e => e.type === "rectangle")).toBe(true);
+  expect(disk.elements.find(e => e.id === "t399").text).toBe(texts[399].text);
 });
 
 test("a board can't make another board's cached picture show by claiming its id", async () => {

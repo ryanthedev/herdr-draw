@@ -33,7 +33,7 @@ Herdr-draw data lives where Excalidraw keeps foreign data: `customData.{layer,z,
 
 ## Dev loop
 
-- `bun test` (130 tests). `drawh mermaid` runs core/mermaid.js through node (or bun), so agents and the pane lay out alike. Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
+- `bun test` (131 tests). `drawh mermaid` runs core/mermaid.js through node (or bun), so agents and the pane lay out alike. Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
 - `scripts/dev-sync.sh` builds `build/herdr-draw` (adapter + core + svg + drawh) and installs a **copy** into `~/.config/herdr-app/mods/herdr-draw`.
 - See the real window only with `herdr-app shot` (passive). **Never drive the person's mouse or keyboard** to test (theGrid input tools land in whatever app is focused).
 
@@ -89,8 +89,9 @@ sent only to that window's id; quit it by its pid when done.
   `<appHome>/.cache/herdr-draw/img/` (base64 via a temp file, never argv). Like text, images can't rotate in the pane; they paint in
   order between path batches, text still on top.
 - Herdr's `readTextFile` rejects files over **1 MiB** (verified live: a board with two photos wouldn't open, and the watch loop died).
-  All board I/O goes through `adapters/herdr/io.js`: big files are read with `cat` (exec caps output at 8 MiB, the board size limit)
-  and written as <1 MiB parts joined by `cat` + `mv`. The big write's stale check is read-then-rename, not atomic.
+  All board I/O goes through `adapters/herdr/io.js`: big files are read with `cat` (exec caps output at 8 MiB); past 8 MiB, perl
+  splits them into <1 MiB parts on character boundaries (the runtime has no TextDecoder) read with readTextFile (limit 64 MiB).
+  Writes go as <1 MiB parts joined by `cat` + `mv`. The big write's stale check is read-then-rename, not atomic.
 - Export (⌘⇧E, `herdr-app do herdr-draw.export`, `drawh export`): SVG from `core/export.js`, PNG = that SVG at 2× through
   macOS `sips` (verified live; QuickLook crops to a square). Raster exports pass `svgImages: false` to `toSvg`: only pictures whose
   bytes match their declared PNG/JPEG/GIF/WebP type go to sips, so a board's SVG can't make it fetch files or URLs.
