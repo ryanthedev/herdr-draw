@@ -66,7 +66,12 @@ Window `31533` / `~/.cache/eht` belongs to the engram agent: leave it alone.
    button, ✕, and dropping a library (keys and clicks don't reach the test pane). Unverified: our library in excalidraw.com.
    Also: arrows now bind to images and elbows route around them; paste gives copies fresh group ids.
    Small: library previews are cached with the theme colors of the moment; a theme change shows old colors until the item changes.
-4. **Elbow fidelity**: write Excalidraw's `fixedPoint` bindings so elbows open right in excalidraw.com; measure routing cost when dragging a hub with many elbows.
+4. ~~Elbow fidelity~~ done (2026-11-08, third session): elbows write Excalidraw's `binding.fixedPoint` (fraction of the bound
+   shape's unrotated box; 0.5 → 0.5001 like excalidraw.com). Without it excalidraw.com pinned elbow ends to shape centers and
+   looped when a shape moved. `drawh` now bakes elbow routes on every save (core `settle` through node). **Verified in
+   excalidraw.com** with a headless-Chromium probe (see "excalidraw.com probe" below): load and drag keep clean routes.
+   We still pick sides automatically (we don't read fixedPoint back as a side lock). Cost: dragging a hub with 100 elbows
+   is ~4.4 ms/frame headless (10: 0.5 ms), so no work needed.
 5. **Text measuring**: wrapping uses an estimated glyph width (`core/text.js` `CHAR_W`); hand and mono fonts wrap a bit off.
 6. Networking (deferred by the person): another `onOp` / `receive` pair; presence already renders from `editor.peers`.
 

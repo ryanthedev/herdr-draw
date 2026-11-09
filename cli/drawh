@@ -12,7 +12,7 @@ Coordinates are scene pixels, x right, y down. Shapes are 140x80 unless --w/--h.
   drawh text FILE --at X,Y TEXT [--size 20] [--color C]
   drawh arrow FILE FROM TO [--label TEXT] [--line] [--elbow] [--dashed] [--color C]
                                                 connect two element ids (or labels); the pane routes it
-  drawh label FILE ID TEXT                      set or replace a shape's label
+  drawh label FILE ID TEXT                      set or replace a shape's or an arrow's label
   drawh move FILE ID --at X,Y | --by DX,DY
   drawh style FILE ID [--color C] [--fill C|none] [--dashed|--solid]
   drawh mermaid FILE [SRC] [--at X,Y] [--elbow]         import a Mermaid flowchart (file, or - / nothing for stdin) as
@@ -284,24 +284,28 @@ def load(path):
         die(f"{path} isn't valid JSON: {e}")
 
 
-def settle_elbows(scene):
-    """Route elbow arrows with the board's own code (core/geometry.js settle) and bake the route and
-    Excalidraw's fixedPoints into the file, so it opens right without the pane (and in excalidraw.com)."""
-    if not any(e.get("elbowed") and not e.get("isDeleted") and (e.get("startBinding") or e.get("endBinding")) for e in scene["elements"]):
+def settle_for_file(scene):
+    """Bake what the pane derives, with the board's own code (core/geometry.js), so the file opens right
+    without the pane and in excalidraw.com: bound arrows' ends on the outlines, elbow routes and their
+    fixedPoints (new versions), and
+    label boxes (centered in their shape or on their arrow; derived, so no new versions)."""
+    if not any(not e.get("isDeleted") and (e.get("elbowed") or e.get("containerId") or e.get("startBinding") or e.get("endBinding")) for e in scene["elements"]):
         return
     url = lambda m: json.dumps("file://" + os.path.join(core_dir(), m))
-    script = ("import { Doc } from %s; import { settle } from %s; import { touch } from %s;"
+    script = ("import { Doc } from %s; import { settle, fileScene } from %s; import { touch } from %s;"
               "let s = ''; process.stdin.on('data', d => s += d); process.stdin.on('end', () => {"
-              " const doc = new Doc(JSON.parse(s)), out = [];"
-              " for (const el of doc.live()) if (el.elbowed) { const c = structuredClone(el);"
-              "  if (settle(doc, c)) { touch(c); doc.apply({ elements: [c] }, { force: true }); out.push(c); } }"
+              " const doc = new Doc(JSON.parse(s)), out = {};"
+              " for (const el of doc.live()) if (el.elbowed || el.startBinding || el.endBinding) { const c = structuredClone(el);"
+              "  if (settle(doc, c)) { touch(c); doc.apply({ elements: [c] }, { force: true }); out[c.id] = c; } }"
+              " const before = new Map(doc.toScene().elements.map(e => [e.id, e]));"
+              " for (const e of fileScene(doc, doc.toScene()).elements) if (e !== before.get(e.id)) out[e.id] = e;"
               " process.stdout.write(JSON.stringify(out)); });") % (url("doc.js"), url("geometry.js"), url("model.js"))
-    done = {e["id"]: e for e in json.loads(run_js(script, json.dumps(scene)))}
+    done = json.loads(run_js(script, json.dumps(scene)))
     scene["elements"] = [done.get(e["id"], e) for e in scene["elements"]]
 
 
 def save(path, scene):
-    settle_elbows(scene)
+    settle_for_file(scene)
     tmp = path + ".drawh.tmp"
     with open(tmp, "w") as f:
         json.dump(scene, f, indent=2)
@@ -339,14 +343,14 @@ def bound(el, eid, kind):
     el["boundElements"] = [b for b in (el.get("boundElements") or []) if b["id"] != eid] + [{"id": eid, "type": kind}]
 
 
-def set_label(scene, shape, text):
+def set_label(scene, shape, text, size=20):
     old = label_of(scene, shape)
     text = text.replace("\\n", "\n")
     if old:
         old["text"] = old["originalText"] = text
         touch(old)
         return old
-    t = text_el(text, shape["x"], shape["y"], container=shape["id"], color=shape["strokeColor"])
+    t = text_el(text, shape["x"], shape["y"], size=size, container=shape["id"], color=shape["strokeColor"])
     t["customData"] = dict(shape.get("customData", {}))
     scene["elements"].append(t)
     bound(shape, t["id"], "text")
@@ -541,9 +545,8 @@ def main():
         place(scene, el, next((l["name"] for l in layers(scene) if l["id"] == lid), None))
         for t_ in (s, e):
             bound(t_, el["id"], "arrow"); touch(t_)
-        if args.label:
-            mx, my = (sx + ex) / 2, (sy + ey) / 2
-            scene["elements"].append(text_el(args.label, mx + 8, my - 26, size=16))
+        if args.label:   # bound to the arrow (Excalidraw's arrow label): it sits halfway along whatever route it takes
+            set_label(scene, el, args.label, size=16)
         out = el["id"]
     elif args.cmd == "label":
         el = find(scene, args.id)

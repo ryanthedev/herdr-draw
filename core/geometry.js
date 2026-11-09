@@ -2,6 +2,7 @@
 
 import { isShape, isLinear, isLabel, textSize } from "./model.js";
 import { elbowRoute } from "./elbow.js";
+import { labelLines } from "./text.js";
 
 export function bbox(el) {
   if (isLinear(el)) {
@@ -239,14 +240,34 @@ export function settle(doc, el) {
   return true;
 }
 
-// A scene for other tools: elbows that were never settled since fixedPoints existed (older
-// boards) get theirs, derived from the geometry, so no new versions.
-export function sceneWithFixedPoints(doc, scene) {
+// The scene as written to the file, for tools that read the geometry as stored (excalidraw.com):
+// - elbows never settled since fixedPoints existed (older boards) get theirs;
+// - labels get the box Excalidraw paints them in: centered in their shape (wrapped as we wrap
+//   them), or halfway along their arrow. We derive labels' places when drawing, so these
+//   fields are derived too, and change no versions.
+export function fileScene(doc, scene) {
   const elements = scene.elements.map(e => {
-    if (!e.elbowed || e.isDeleted || !(e.startBinding && !e.startBinding.fixedPoint || e.endBinding && !e.endBinding.fixedPoint)) return e;
-    return { ...e, ...withFixedPoints(doc, e, resolvedPoints(doc, e)) };
+    if (e.isDeleted) return e;
+    if (e.elbowed && (e.startBinding && !e.startBinding.fixedPoint || e.endBinding && !e.endBinding.fixedPoint))
+      return { ...e, ...withFixedPoints(doc, e, resolvedPoints(doc, e)) };
+    if (e.type === "text" && e.containerId) {
+      const host = doc.get(e.containerId), b = host && labelBox(doc, e, host);
+      if (b && (b.x !== e.x || b.y !== e.y || b.width !== e.width || b.height !== e.height)) return { ...e, ...b };
+    }
+    return e;
   });
   return { ...scene, elements };
+}
+
+function labelBox(doc, label, host) {
+  const lh = label.lineHeight ?? 1.25;
+  let c, lines;
+  if (isLinear(host)) {
+    const pts = resolvedPoints(doc, host); if (pts.length < 2) return null;
+    const m = alongPath(pts); c = { x: m[0], y: m[1] }; lines = String(label.text ?? "").split("\n");
+  } else { c = center(bbox({ ...host, angle: 0 })); lines = labelLines(label, host); }
+  const width = Math.max(1, ...lines.map(l => textSize(l, label.fontSize, lh).w)), height = lines.length * label.fontSize * lh;
+  return { x: c.x - width / 2, y: c.y - height / 2, width, height };
 }
 
 // Map an element from box `from` into box `to` (resizing a selection).
