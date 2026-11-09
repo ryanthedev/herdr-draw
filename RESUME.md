@@ -38,6 +38,14 @@ Set up 2026-11-08 so the person can test and give feedback:
 - An open board pane may keep the old build after an update (see CLAUDE.md): close it and press ⌘⇧B again.
 - Feedback from the person goes in `FEEDBACK.md` (read it first next session).
 
+## Help and demo (2026-11-08, fourth session)
+
+- `?` (or the toolbar's ?) shows every shortcut from `core/shortcuts.js`; `test/shortcuts.test.js` presses each listed key on a
+  real Editor, so a key added to Editor.key belongs in that list too. Tools, lock, panels and side-panel rows show their keys.
+- Demo: D in the help, "play the demo" on an empty board, or `herdr-app do herdr-draw.demo`. `core/demo.js` builds an animated
+  board played in a second Editor; the person's editor waits in `view.board` (file store still bound to it), so nothing in the
+  demo is saved or exported. Esc goes back. Verified live in the test window (help overlay, demo mid-play and at the end).
+
 ## How to verify in real Herdr (never the person's window)
 
 Isolated home `~/.cache/hdt` already exists (layout `drawtest` shows only the board, file `~/.cache/hdt/t.excalidraw`):

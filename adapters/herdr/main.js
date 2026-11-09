@@ -20,12 +20,16 @@ import { isShape, isLabel, layerOf } from "./core/model.js";
 import { toSvg, RASTER_FACES } from "./svg.js";
 import { FileStore } from "./store.js";
 import { readText, writeText } from "./io.js";
+import { SHORTCUTS } from "./core/shortcuts.js";
+import { demoScene } from "./core/demo.js";
 
 const MOD = "herdr-draw";
 const Z = () => Number(settings().zoom) || 1;
 const CACHE = () => `${home()}/.cache/herdr-draw`;
 const SIDEBAR = 232;
-const ALIGN = [["left", "⇤"], ["hcenter", "↔"], ["right", "⇥"], ["top", "⤒"], ["vcenter", "↕"], ["bottom", "⤓"]];
+const ALIGN = [["left", "⇤", "⌥A"], ["hcenter", "↔", "⌥H"], ["right", "⇥", "⌥D"], ["top", "⤒", "⌥W"], ["vcenter", "↕", "⌥V"], ["bottom", "⤓", "⌥S"]];
+const BADGES_MIN_W = 640;   // narrower than this, the toolbar shows icons only (keys stay in tooltips and ?)
+const isHelpKey = e => e.key === "?" || e.key_char === "?" || (e.key === "/" && !!e.modifiers?.shift && !e.modifiers?.platform);
 const CLEAR = "#00000000";
 // image() loads only paths under the app home (~/.config/herdr-app or $HERDR_APP_HOME), so
 // board images are decoded into a hidden cache there: outside the mod folder (no hot reload,
@@ -100,6 +104,8 @@ export default class Draw extends View {
     this.ed = new Editor({ onOp: op => { if (!op.transient) this.dirty = true; } });
     this.error = this.file ? null : "No file: open with props {file}";
     this.flash = null; this.sidebar = p.sidebar ?? true; this.selKey = "";
+    this.help = false;      // the ? overlay
+    this.board = null;      // while the demo plays: the person's own editor, kept aside (the demo is never saved)
     this.tick = null; this.size = { w: 900, h: 600 }; this.measured = false;   // a default size so panels render before layout this.textOpen = false; this.renaming = null;
     this.handle = cx.focus_handle();
     this.imgs = new Map();   // file id → cache path (relative to the app home) once decoded; "pending" / "failed"
@@ -136,6 +142,8 @@ export default class Draw extends View {
         else if (c === "play") this.ed.playToggle();
         else if (c === "export") { if (this.file) await this.exportBoard(); }
         else if (c === "write") this.ed.beginText(null, this.ed.toWorld({ x: this.size.w / 3, y: this.size.h / 3 }));   // start typing (no mouse needed)
+        else if (c === "help") this.help = !this.help;
+        else if (c === "demo") { if (this.board) this.endDemo(); else this.startDemo(); }
         else if (c === "focus") { cx.timer.after(60, () => { if (panes().find(q => q.focused)?.mod === MOD) this.handle.focus(); }); continue; }
         this.after(cx);
       }
@@ -144,6 +152,19 @@ export default class Draw extends View {
 
   // On open, show the drawing at 100% (centered) unless it's too big, then zoom out to fit.
   maybeFit() { if (!this.fitted && this.measured && this.ed.doc.live().length) { this.fitted = true; this.ed.fit(); } }
+
+  // The demo: a fresh Editor on core/demo.js's board, played at once. The person's editor (and its
+  // file store, which holds it) waits in this.board, still taking the file's outside changes.
+  startDemo() {
+    if (!this.board) this.board = this.ed;
+    const ed = new Editor({ scene: demoScene() });
+    ed.setSize(this.size.w, this.size.h); ed.fit(); ed.playToggle();
+    this.ed = ed; this.help = false; this.flash = null;
+  }
+  endDemo() {
+    if (!this.board) return;
+    this.ed = this.board; this.board = null; this.ed.setSize(this.size.w, this.size.h); this.flash = "back to your board";
+  }
 
   // After every event: keep the text box, timer and agent selection file in step.
   after(cx) {
@@ -164,7 +185,7 @@ export default class Draw extends View {
     }
     const key = [...ed.sel].sort().join(",");
     // Not mid-gesture: a marquee changes the selection on every mouse move.
-    if (key !== this.selKey && !ed.g) { this.selKey = key; this.writeSelection(); }
+    if (key !== this.selKey && !ed.g && !this.board) { this.selKey = key; this.writeSelection(); }
     if (this.dirty && this.store) { this.dirty = false; this.store.schedule(cx); }
     if (!ed.g) this.store?.flushPending(cx);
     cx.notify();
@@ -201,6 +222,13 @@ export default class Draw extends View {
 
   keys(e, cx) {
     if (this.renaming) return;
+    if (this.help) {   // the overlay takes every key: ? or Esc closes it, D plays the demo
+      if (e.key === "d" && !e.modifiers?.platform) this.startDemo();
+      else if (isHelpKey(e) || e.key === "escape" || e.key === "q") this.help = false;
+      cx.stop_propagation(); return this.after(cx);
+    }
+    if (!this.ed.text && isHelpKey(e)) { this.help = true; cx.stop_propagation(); return this.after(cx); }
+    if (this.board && !this.ed.text && e.key === "escape") { this.endDemo(); cx.stop_propagation(); return this.after(cx); }
     if (this.ed.text && !this.inputFocused) { if (this.typeFallback(e, cx)) cx.stop_propagation(); return; }
     if (this.ed.text && (e.key === "escape" || (e.key === "enter" && (e.modifiers?.platform || e.modifiers?.control)))) { this.ed.setText(this.input.value()); this.ed.commitText(); cx.stop_propagation(); return this.after(cx); }
     const ed = this.ed, m = e.modifiers ?? {}, mm = { shift: m.shift, alt: m.alt, cmd: m.platform, ctrl: m.control };
@@ -222,7 +250,7 @@ export default class Draw extends View {
       });
       cx.stop_propagation(); return;
     }
-    if (!ed.text && m.platform && m.shift && e.key === "e") { cx.spawn(async cx => { await this.exportBoard(); cx.notify(); }); cx.stop_propagation(); return this.after(cx); }
+    if (!ed.text && m.platform && m.shift && e.key === "e") { if (this.board) { this.flash = "the demo isn't saved or exported: Esc goes back to your board"; cx.stop_propagation(); return this.after(cx); } cx.spawn(async cx => { await this.exportBoard(); cx.notify(); }); cx.stop_propagation(); return this.after(cx); }
     if (!ed.text && !m.platform && !m.control && e.key === "i") { this.sidebar = !this.sidebar; cx.stop_propagation(); return this.after(cx); }
     if (ed.key(e.key, mm)) { cx.stop_propagation(); this.after(cx); }
   }
@@ -296,7 +324,7 @@ export default class Draw extends View {
   // next to the board, cropped to the drawing, on the board's own page color. The PNG is the
   // same SVG rasterized by macOS's sips, which renders embedded pictures and any script.
   async exportBoard() {
-    const doc = this.ed.doc, theme = boardTheme(doc.appState), base = this.file.replace(/\.excalidraw(\.json)?$/, "");
+    const doc = (this.board ?? this.ed).doc, theme = boardTheme(doc.appState), base = this.file.replace(/\.excalidraw(\.json)?$/, "");
     const name = p => p.split("/").pop();
     try {
       const flat = exportScene(doc, theme, { scale: 1 });
@@ -354,10 +382,14 @@ export default class Draw extends View {
   toolbar(t) {
     const ed = this.ed, name = (this.file ?? "").split("/").pop();
     const status = this.error ?? this.flash ?? ed.flash ?? `${ed.doc.visible().filter(e => !isLabel(e)).length} elements`;
+    const badges = this.size.w + (this.sidebar ? SIDEBAR : 0) >= BADGES_MIN_W;
+    // Each tool shows its key beside its icon (as Excalidraw does), unless the pane is narrow.
+    const labelled = (icon, key, size = 14) => h_flex().items_center().gap(2).child(div().text_size(size).child(icon))
+      .when(badges && !!key, e => e.child(div().text_size(9).opacity(0.65).child(key)));
     return h_flex().id("draw-bar").w_full().h(36).px(6).gap(1).items_center().border_b(1).border_color(t.border).bg(t.surface ?? t.background).flex_shrink_0()
-      .children(TOOLS.map(tool => this.button(t, `tool-${tool.id}`, div().text_size(14).child(tool.icon), ed.tool === tool.id, `${tool.name} (${tool.keys.join(" / ")})`, () => ed.setTool(tool.id))))
+      .children(TOOLS.map(tool => this.button(t, `tool-${tool.id}`, labelled(tool.icon, tool.keys[0].toUpperCase()), ed.tool === tool.id, `${tool.name} (${tool.keys.map(k => k.toUpperCase()).join(" or ")})`, () => ed.setTool(tool.id))))
       .child(div().w(1).h(18).mx(4).bg(t.border))
-      .child(this.button(t, "lock", div().text_size(12).child(ed.toolLock ? "🔒" : "🔓"), ed.toolLock, "Keep the tool after drawing (q)", () => ed.key("q")))
+      .child(this.button(t, "lock", labelled(ed.toolLock ? "🔒" : "🔓", "Q", 12), ed.toolLock, "Keep the tool after drawing (Q)", () => ed.key("q")))
       .child(this.button(t, "undo", div().text_size(14).child("↶"), false, "Undo (⌘Z)", () => ed.undo()))
       .child(this.button(t, "redo", div().text_size(14).child("↷"), false, "Redo (⌘⇧Z)", () => ed.redo()))
       .child(this.button(t, "grid", div().text_size(13).child("▦"), !!ed.grid, "Snap to grid (⌘')", () => ed.key("'", { cmd: true })))
@@ -365,7 +397,8 @@ export default class Draw extends View {
       .child(div().text_size(12).text_color(this.error ? t.blocked : t.dim).truncate().child(status))
       .child(div().w(8))
       .child(this.button(t, "zoom", div().text_size(11).text_color(t.muted).child(`${Math.round(ed.view.scale * 100)}%`), false, "Fit everything (⇧1)", () => ed.fit()))
-      .child(this.button(t, "side", div().text_size(13).child("◧"), this.sidebar, "Properties and layers (i)", () => { this.sidebar = !this.sidebar; }))
+      .child(this.button(t, "side", labelled("◧", "I", 13), this.sidebar, "Properties and layers (I)", () => { this.sidebar = !this.sidebar; }))
+      .child(this.button(t, "help", div().text_size(13).font_semibold().child("?"), this.help, "Every shortcut, and a demo (?)", () => { this.help = !this.help; }))
       .child(div().ml(4).text_size(12).text_color(t.muted).truncate().child(name));
   }
 
@@ -378,7 +411,9 @@ export default class Draw extends View {
       .children(layers.filter(l => l.n).map(l => l.img ? this.imageItem(l.img, t) : div().absolute().top(0).left(0).size_full().child(window.paint_path(l.b.build(), l.color))))
       .children(texts.map(it => this.textItem(it, t)))
       .when(!this.ed.doc.live().length && !this.error, e => e.child(this.emptyHint(t)))
-      .when(!!this.ed.text, e => e.child(this.textInput(t)));
+      .when(!!this.ed.text, e => e.child(this.textInput(t)))
+      .when(!!this.board, e => e.child(this.demoBar(t)))
+      .when(this.help, e => e.child(this.helpOverlay(t)));
   }
 
   // ── library ──────────────────────────────────────────────────────────
@@ -470,7 +505,43 @@ export default class Draw extends View {
         .child(div().child("r ▭   d ◇   o ◯   a →   l ╱   p ✎   t T   f frame   e eraser   k laser"))
         .child(div().child("double-click to write · drag empty space to select · ⌘Z undo · i panels"))
         .child(div().child("drop or paste an image to put it on the board"))
-        .child(div().child("agents: drawh add / arrow / ls / sel")));
+        .child(div().child("agents: drawh add / arrow / ls / sel"))
+        .child(h_flex().gap(8).mt(6)
+          .child(this.chip(t, "hint-help", "?  every shortcut", false, "Every shortcut (?)", () => { this.help = true; }, 120))
+          .child(this.chip(t, "hint-demo", "▶  play the demo", false, "A short animated tour (not saved)", () => this.startDemo(), 120))));
+  }
+
+  // Over the canvas while the demo plays: what this is, and the way back.
+  demoBar(t) {
+    return h_flex().id("demo-bar").absolute().top(8).left(0).w_full().justify_center()
+      .child(h_flex().gap(8).px(10).py(4).items_center().rounded(8).border(1).border_color(t.accent).bg(t.surface ?? t.background)
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .child(div().text_size(12).text_color(t.foreground).font_semibold().child("DEMO"))
+        .child(div().text_size(12).text_color(t.muted).child("try anything, nothing is saved"))
+        .child(this.chip(t, "demo-replay", "↻ replay  ⇧Space", false, "Play it again (⇧Space)", () => { this.ed.stopPlay(); this.ed.playToggle(); }, 110))
+        .child(this.chip(t, "demo-exit", "✕ back to my board  Esc", false, "Leave the demo (Esc)", () => this.endDemo(), 150)));
+  }
+
+  // ?: every shortcut from core/shortcuts.js, in columns. Esc, ? or a click outside closes it.
+  helpOverlay(t) {
+    const kb = k => div().flex_shrink_0().px(5).h(18).rounded(4).border(1).border_color(t.border).bg(withAlpha(t.foreground, 0.05))
+      .flex().items_center().text_size(11).font_semibold().text_color(t.foreground).child(k);
+    const group = ([title, rows]) => v_flex().gap(3).w(320)
+      .child(div().text_size(10).font_semibold().text_color(t.dim).mb(2).child(title.toUpperCase()))
+      .children(rows.map(([keys, what]) => h_flex().gap(8).items_center()
+        .child(h_flex().w(104).flex_shrink_0().justify_end().child(kb(keys)))
+        .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).child(what))));   // min_w(0): long ones wrap, never spill into the next column
+    return div().id("help-overlay").absolute().top(0).left(0).size_full().bg(withAlpha(t.background, 0.82)).flex().items_center().justify_center()
+      .on_mouse_down("left", (_e, cx) => { cx.stop_propagation(); this.help = false; this.after(cx); })
+      .on_scroll_wheel((_e, cx) => cx.stop_propagation())
+      .child(v_flex().id("help-card").max_h_full().max_w_full().overflow_y_scroll().gap(14).p(18).rounded(10).border(1).border_color(t.border).bg(t.surface ?? t.background)
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .child(h_flex().gap(10).items_center()
+          .child(div().text_size(16).font_semibold().child("Shortcuts"))
+          .child(div().flex_1())
+          .child(this.chip(t, "help-demo", "▶  play the demo  D", false, "A short animated tour (not saved)", () => this.startDemo(), 130))
+          .child(this.chip(t, "help-close", "close  Esc", false, "Close (Esc or ?)", () => { this.help = false; }, 70)))
+        .child(h_flex().flex_wrap().gap(18).items_start().children(SHORTCUTS.map(group))));
   }
 
   // ── panels ─────────────────────────────────────────────────────────────
@@ -490,6 +561,9 @@ export default class Draw extends View {
       .child(this.libraryPanel(t));
   }
 
+  // A chip's label with its key after it, small and dim.
+  keyed(t, label, key) { return h_flex().gap(3).items_center().child(div().child(label)).child(div().text_size(9).text_color(t.dim).child(key)); }
+
   chip(t, id, label, active, tip, fn, w = 26) {
     return div().id(id).h(24).min_w(w).px(4).rounded(5).flex().items_center().justify_center().text_size(12)
       .border(1).border_color(active ? t.accent : t.border).bg(active ? withAlpha(t.accent, 0.18) : CLEAR)
@@ -507,18 +581,21 @@ export default class Draw extends View {
 
   properties(t) {
     const ed = this.ed, cur = ed.selected()[0] ?? ed.style, s = k => cur[k] ?? ed.style[k];
-    const row = (label, kids) => h_flex().w_full().items_center().gap(4).child(div().w(44).flex_shrink_0().text_size(11).text_color(t.muted).child(label)).child(h_flex().flex_1().flex_wrap().gap(4).children(kids));
+    // A row's label carries its key (C, B, W…): the panels teach the keys as they are used.
+    const row = (label, kids, key) => h_flex().w_full().items_center().gap(4)
+      .child(h_flex().w(44).flex_shrink_0().gap(3).items_center().child(div().text_size(11).text_color(t.muted).child(label)).when(!!key, e => e.child(div().text_size(9).text_color(t.dim).child(key))))
+      .child(h_flex().flex_1().flex_wrap().gap(4).children(kids));
     const body = v_flex().gap(6)
-      .child(row("Stroke", STROKES.map((c, i) => this.swatch(t, `st-${i}`, c, s("strokeColor") === c, () => ed.setStyle({ strokeColor: c })))))
-      .child(row("Fill", FILLS.map((c, i) => this.swatch(t, `fi-${i}`, c, s("backgroundColor") === c, () => ed.setStyle({ backgroundColor: c })))))
-      .child(row("Width", WIDTHS.map((w, i) => this.chip(t, `w-${w}`, ["thin", "bold", "extra"][i], s("strokeWidth") === w, `Stroke ${w}px (w)`, () => ed.setStyle({ strokeWidth: w }), 40))))
-      .child(row("Style", STYLES.map(v => this.chip(t, `ss-${v}`, { solid: "—", dashed: "- -", dotted: "···" }[v], s("strokeStyle") === v, `${v} (s)`, () => ed.setStyle({ strokeStyle: v })))))
-      .child(row("Sketch", [0, 1, 2].map(r => this.chip(t, `ro-${r}`, ["clean", "sketch", "loose"][r], s("roughness") === r, "Roughness (g toggles)", () => ed.setStyle({ roughness: r }), 44))))
+      .child(row("Stroke", STROKES.map((c, i) => this.swatch(t, `st-${i}`, c, s("strokeColor") === c, () => ed.setStyle({ strokeColor: c }))), "C"))
+      .child(row("Fill", FILLS.map((c, i) => this.swatch(t, `fi-${i}`, c, s("backgroundColor") === c, () => ed.setStyle({ backgroundColor: c }))), "B"))
+      .child(row("Width", WIDTHS.map((w, i) => this.chip(t, `w-${w}`, ["thin", "bold", "extra"][i], s("strokeWidth") === w, `Stroke ${w}px (W)`, () => ed.setStyle({ strokeWidth: w }), 40)), "W"))
+      .child(row("Style", STYLES.map(v => this.chip(t, `ss-${v}`, { solid: "—", dashed: "- -", dotted: "···" }[v], s("strokeStyle") === v, `${v} (S)`, () => ed.setStyle({ strokeStyle: v }))), "S"))
+      .child(row("Sketch", [0, 1, 2].map(r => this.chip(t, `ro-${r}`, ["clean", "sketch", "loose"][r], s("roughness") === r, "Roughness (G toggles)", () => ed.setStyle({ roughness: r }), 44)), "G"))
       .child(row("Opacity", [100, 75, 50, 25].map(o => this.chip(t, `op-${o}`, `${o}`, s("opacity") === o, `Opacity ${o}%`, () => ed.setStyle({ opacity: o })))))
       .child(row("Fill", ["solid", "hachure", "cross-hatch"].map(f => this.chip(t, `fs2-${f}`, { solid: "solid", hachure: "////", "cross-hatch": "xxxx" }[f], (s("fillStyle") ?? "solid") === f, `Fill style: ${f}`, () => ed.setStyle({ fillStyle: f }), 40))))
       .child(row("Edges", [["sharp", null], ["round", { type: 3 }]].map(([lab, v]) => this.chip(t, `rd-${lab}`, lab, !!s("roundness") === !!v, `${lab} corners / curves`, () => ed.setStyle({ roundness: v }), 44))))
       .child(row("Font", Object.keys(FONT_FAMILY).map(f => this.chip(t, `ff-${f}`, f, (ed.selected()[0] && (ed.selected()[0].type === "text" ? ed.selected()[0].fontFamily : ed.doc.labelOf(ed.selected()[0])?.fontFamily) || ed.style.fontFamily) === FONT_FAMILY[f], `Font: ${f}`, () => ed.setStyle({ fontFamily: FONT_FAMILY[f] }), 40))))
-      .child(row("Text", [16, 20, 28, 36].map(f => this.chip(t, `fs-${f}`, `${f}`, (ed.selectedFont() ?? ed.style.fontSize) === f, `Font size ${f} (= and -)`, () => ed.setStyle({ fontSize: f })))));
+      .child(row("Text", [16, 20, 28, 36].map(f => this.chip(t, `fs-${f}`, `${f}`, (ed.selectedFont() ?? ed.style.fontSize) === f, `Font size ${f} (= and -)`, () => ed.setStyle({ fontSize: f }))), "= -"));
     const arrowSel = ed.selected().find(e => e.type === "arrow");
     if (arrowSel || ed.tool === "arrow") {
       const kind = a => (a?.elbowed ? "elbow" : a?.roundness ? "curve" : "sharp"), cur = arrowSel ? kind(arrowSel) : kind(ed.style);
@@ -536,22 +613,22 @@ export default class Draw extends View {
     const ed = this.ed;
     if (!ed.sel.size) return div();
     const body = v_flex().gap(6)
-      .child(h_flex().gap(4).children(ALIGN.map(([how, icon]) => this.chip(t, `al-${how}`, icon, false, `Align ${how} (⌥ A D W S H V)`, () => ed.align(how)))))
-      .child(h_flex().gap(4)
-        .child(this.chip(t, "dh", "⇹", false, "Distribute horizontally (⇧H)", () => ed.distribute("h")))
-        .child(this.chip(t, "dv", "⇳", false, "Distribute vertically (⇧V)", () => ed.distribute("v")))
-        .child(this.chip(t, "zf", "⤒", false, "Bring to front (⌘])", () => ed.reorder("front")))
-        .child(this.chip(t, "zu", "↑", false, "Bring forward (])", () => ed.reorder("forward")))
-        .child(this.chip(t, "zd", "↓", false, "Send backward ([)", () => ed.reorder("backward")))
-        .child(this.chip(t, "zb", "⤓", false, "Send to back (⌘[)", () => ed.reorder("back"))))
-      .child(h_flex().gap(4)
-        .child(this.chip(t, "grp", "group", false, "Group (⌘G)", () => ed.group(), 44))
-        .child(this.chip(t, "ugrp", "ungroup", false, "Ungroup (⌘⇧G)", () => ed.ungroup(), 54))
-        .child(this.chip(t, "dup", "dup", false, "Duplicate (⌘D)", () => ed.cloneSelection(20, 20), 34))
-        .child(this.chip(t, "lk", "lock", ed.selected().some(e => e.locked), "Lock (⌘⇧L)", () => ed.toggleLock(), 36)))
-      .child(h_flex().gap(4)
-        .child(this.chip(t, "rl", "⟲ 15°", false, "Rotate left 15° (<)", () => ed.rotateBy(-15), 44))
-        .child(this.chip(t, "rr", "⟳ 15°", false, "Rotate right 15° (>)", () => ed.rotateBy(15), 44))
+      .child(h_flex().flex_wrap().gap(4).children(ALIGN.map(([how, icon, key]) => this.chip(t, `al-${how}`, this.keyed(t, icon, key), false, `Align ${how} (${key})`, () => ed.align(how)))))
+      .child(h_flex().flex_wrap().gap(4)
+        .child(this.chip(t, "dh", this.keyed(t, "⇹", "⇧H"), false, "Distribute horizontally (⇧H)", () => ed.distribute("h")))
+        .child(this.chip(t, "dv", this.keyed(t, "⇳", "⇧V"), false, "Distribute vertically (⇧V)", () => ed.distribute("v")))
+        .child(this.chip(t, "zf", this.keyed(t, "⤒", "⌘]"), false, "Bring to front (⌘])", () => ed.reorder("front")))
+        .child(this.chip(t, "zu", this.keyed(t, "↑", "]"), false, "Bring forward (])", () => ed.reorder("forward")))
+        .child(this.chip(t, "zd", this.keyed(t, "↓", "["), false, "Send backward ([)", () => ed.reorder("backward")))
+        .child(this.chip(t, "zb", this.keyed(t, "⤓", "⌘["), false, "Send to back (⌘[)", () => ed.reorder("back"))))
+      .child(h_flex().flex_wrap().gap(4)
+        .child(this.chip(t, "grp", this.keyed(t, "group", "⌘G"), false, "Group (⌘G)", () => ed.group(), 44))
+        .child(this.chip(t, "ugrp", this.keyed(t, "ungroup", "⌘⇧G"), false, "Ungroup (⌘⇧G)", () => ed.ungroup(), 54))
+        .child(this.chip(t, "dup", this.keyed(t, "dup", "⌘D"), false, "Duplicate (⌘D)", () => ed.cloneSelection(20, 20), 34))
+        .child(this.chip(t, "lk", this.keyed(t, "lock", "⌘⇧L"), ed.selected().some(e => e.locked), "Lock (⌘⇧L)", () => ed.toggleLock(), 36)))
+      .child(h_flex().flex_wrap().gap(4)
+        .child(this.chip(t, "rl", this.keyed(t, "⟲ 15°", "<"), false, "Rotate left 15° (<)", () => ed.rotateBy(-15), 44))
+        .child(this.chip(t, "rr", this.keyed(t, "⟳ 15°", ">"), false, "Rotate right 15° (>)", () => ed.rotateBy(15), 44))
         .child(this.chip(t, "r90", "⟳ 90°", false, "Rotate 90°", () => ed.rotateBy(90), 44))
         .child(this.chip(t, "r0", "0°", false, "Reset rotation", () => ed.resetRotation(), 30)));
     return this.section(t, "Arrange", body);
@@ -563,7 +640,7 @@ export default class Draw extends View {
       .child(h_flex().flex_wrap().gap(4).children(PRESET_NAMES.map(p => this.chip(t, `an-${p}`, p, anim === p, n ? `Animate the selection: ${p}` : "Select something to animate", () => { if (n) ed.animate(p); }, 40))))
       .child(h_flex().gap(4)
         .child(this.chip(t, "an-clear", "none", false, "Remove the selection's animation", () => ed.clearAnimation(), 40))
-        .child(this.chip(t, "an-play", ed.play ? "❚❚ pause" : "▶ play", !!ed.play, "Play the timeline (⇧space)", () => ed.playToggle(), 64)));
+        .child(this.chip(t, "an-play", this.keyed(t, ed.play ? "❚❚ pause" : "▶ play", "⇧Space"), !!ed.play, "Play the timeline (⇧Space)", () => ed.playToggle(), 64)));
     return this.section(t, "Animate", body);
   }
 

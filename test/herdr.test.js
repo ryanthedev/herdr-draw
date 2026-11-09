@@ -410,3 +410,51 @@ test("dropping a .excalidrawlib adds its items once, however often it's dropped"
   expect(textOf(ui.tree())).toContain("library: 0 items added");             // the second drop
   await ui.shot("herdr-library");
 });
+
+test("? opens every shortcut, Esc closes it; tools and panels show their keys", async () => {
+  const ui = await open();
+  await ui.cx.flush();
+  expect(textOf(byId(ui.tree(), "tool-rectangle"))).toContain("R");             // badge beside the icon
+  expect(textOf(byId(ui.tree(), "lock"))).toContain("Q");
+  expect(textOf(byId(ui.tree(), "draw-side"))).toContain("Stroke");
+  expect(textOf(byId(ui.tree(), "draw-side"))).toMatch(/StrokeC/);              // the row's key after its label
+  ui.key("/", { shift: true });                                                 // how GPUI reports "?"
+  const help = byId(ui.tree(), "help-overlay");
+  expect(help).toBeTruthy();
+  expect(textOf(help)).toContain("Shortcuts");
+  expect(textOf(help)).toContain("Distribute across, down");
+  ui.key("r");                                                                  // swallowed while it's open
+  expect(ui.view.ed.tool).toBe("select");
+  ui.key("escape");
+  expect(byId(ui.tree(), "help-overlay")).toBe(null);
+  ui.click("help");                                                             // the toolbar's ? button
+  expect(byId(ui.tree(), "help-overlay")).toBeTruthy();
+  ui.fire("help-overlay", "on_mouse_down:left", ui.ev(5, 5));                           // a click outside the card
+  expect(byId(ui.tree(), "help-overlay")).toBe(null);
+});
+
+test("the demo plays in its own editor and never touches the person's board", async () => {
+  const ui = await open();
+  await ui.cx.flush();
+  ui.click("tool-rectangle"); ui.drag([60, 60], [140, 120]);
+  await ui.cx.flush();
+  const mine = ui.view.ed, disk = readFileSync(file, "utf8");
+  ui.key("/", { shift: true }); ui.key("d");                                    // D in the help list
+  expect(ui.view.board).toBe(mine);
+  expect(ui.view.ed).not.toBe(mine);
+  expect(ui.view.ed.play).toBeTruthy();
+  expect(byId(ui.tree(), "demo-bar")).toBeTruthy();
+  expect(byId(ui.tree(), "draw-timeline")).toBeTruthy();
+  ui.key("r"); ui.drag([300, 300], [400, 380]);                                 // play with it
+  await ui.cx.flush();
+  expect(readFileSync(file, "utf8")).toBe(disk);                                // nothing saved
+  ui.key("e", { platform: true, shift: true });                                 // export is refused, not the demo written over the board's export
+  expect(textOf(ui.tree())).toContain("the demo isn't saved");
+  ui.key("escape");                                                             // Esc: back (also cancels the rectangle tool's nothing)
+  expect(ui.view.ed).toBe(mine);
+  expect(ui.view.board).toBe(null);
+  expect(byId(ui.tree(), "demo-bar")).toBe(null);
+  ui.key("r"); ui.drag([200, 200], [260, 250]);
+  await ui.cx.flush();
+  expect(readFileSync(file, "utf8")).not.toBe(disk);                            // saving works again
+});
