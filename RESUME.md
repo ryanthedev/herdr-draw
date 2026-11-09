@@ -65,6 +65,7 @@ Window `31533` / `~/.cache/eht` belongs to the engram agent: leave it alone.
    pane's panel with previews, and `drawh lib insert` landed on the board with labels. Headless only: clicking a tile, the "+"
    button, ✕, and dropping a library (keys and clicks don't reach the test pane). Unverified: our library in excalidraw.com.
    Also: arrows now bind to images and elbows route around them; paste gives copies fresh group ids.
+   Small: library previews are cached with the theme colors of the moment; a theme change shows old colors until the item changes.
 4. **Elbow fidelity**: write Excalidraw's `fixedPoint` bindings so elbows open right in excalidraw.com; measure routing cost when dragging a hub with many elbows.
 5. **Text measuring**: wrapping uses an estimated glyph width (`core/text.js` `CHAR_W`); hand and mono fonts wrap a bit off.
 6. Networking (deferred by the person): another `onOp` / `receive` pair; presence already renders from `editor.peers`.
