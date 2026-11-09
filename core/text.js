@@ -27,7 +27,9 @@ export function labelWidthFactor(type) {
 // Split text into lines no wider than maxW (scene px) at this font size and family.
 // Explicit newlines are kept; words much longer than a line are broken.
 export function wrapLines(text, maxW, fontSize, fontFamily = 2) {
+  if (!(fontSize > 0) || !Number.isFinite(fontSize)) return String(text ?? "").split("\n");   // a broken board: don't wrap
   const W = t => textWidth(t, fontSize, fontFamily);
+  if (!(maxW > 0)) maxW = W("M");
   const out = [];
   for (const para of String(text ?? "").split("\n")) {
     if (!para) { out.push(""); continue; }
@@ -38,7 +40,7 @@ export function wrapLines(text, maxW, fontSize, fontFamily = 2) {
       // overflow reads better than "signatur/e"); a much longer one breaks.
       if (W(w) > maxW * 1.5) {
         if (line) { out.push(line); line = ""; }
-        while (W(w) > maxW) {
+        while (w.length > 1 && W(w) > maxW) {   // takes at least one char per line, so it ends
           let n = 1; while (n < w.length && W(w.slice(0, n + 1)) <= maxW) n++;
           out.push(w.slice(0, n)); w = w.slice(n);
         }

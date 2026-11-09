@@ -15,6 +15,13 @@ test("wrapLines: word wrap, explicit newlines, long words broken", () => {
   expect(wrapLines("is the signature valid", 90, 20, 3)).toEqual(["is the", "signature", "valid"]);   // 9 chars on a 7-char line stays whole
 });
 
+test("wrapLines always ends, whatever the width or size (a hostile board can't hang the pane)", () => {
+  for (const [w, fs] of [[0, 20], [-50, 20], [NaN, 20], [100, 0], [100, -5], [100, NaN], [Infinity, 20], [100, Infinity]]) {
+    const lines = wrapLines("supercalifragilistic word", w, fs, 2);
+    expect(lines.length).toBeLessThan(40);
+  }
+});
+
 // Measured 2026-11-08 in headless Chromium, average width per char / font size: system UI sans 0.41-0.47,
 // Chalkboard SE / Comic Sans 0.47-0.53, Menlo / Berkeley Mono 0.60. The old single 0.56 made mono overflow.
 test("textWidth: each font family at its own width; mono is exact", () => {
