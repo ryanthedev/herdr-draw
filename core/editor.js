@@ -10,7 +10,7 @@ import {
 } from "./model.js";
 import { Doc } from "./doc.js";
 import {
-  bbox, unionBox, inBox, boxInBox, center, normalize, hits, hitTest, shapeAt, bindTargetAt, resolvedPoints, settle, fileScene, mapIntoBox, distToSeg, segmentsIntersect,
+  bbox, unionBox, inBox, boxInBox, center, normalize, hits, hitTest, shapeAt, bindTargetAt, resolvedPoints, drawnPoints, settle, fileScene, mapIntoBox, distToSeg, segmentsIntersect,
   bounds, corners, rotate, rotateAbout, angleOf, centerOf, toLocal, toWorld as elToWorld, normAngle,
 } from "./geometry.js";
 import { paintScene, paintElement, project, rectCmds, withAlpha } from "./render.js";
@@ -576,7 +576,7 @@ export class Editor {
     for (const el of this.doc.visible()) {
       if (this.erasing.has(el.id) || isLabel(el) || !this.doc.editable(el)) continue;
       let hit = hits(this.doc, el, to, this.tol() * 1.5);
-      if (!hit && isLinear(el)) { const pts = resolvedPoints(this.doc, el); for (let i = 1; i < pts.length && !hit; i++) hit = segmentsIntersect([from.x, from.y], [to.x, to.y], pts[i - 1], pts[i]); }
+      if (!hit && isLinear(el)) { const pts = drawnPoints(this.doc, el); for (let i = 1; i < pts.length && !hit; i++) hit = segmentsIntersect([from.x, from.y], [to.x, to.y], pts[i - 1], pts[i]); }
       if (hit) this.erasing.add(el.id);
     }
     this.changed();

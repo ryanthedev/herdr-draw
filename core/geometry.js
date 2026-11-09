@@ -111,7 +111,7 @@ export function outlineDistance(el, p) {
 export function hits(doc, el, p, tol) {
   if (isLabel(el)) return false;
   if (isLinear(el)) {
-    const pts = resolvedPoints(doc, el);
+    const pts = drawnPoints(doc, el);
     if (pts.length === 1) return Math.hypot(p.x - pts[0][0], p.y - pts[0][1]) <= tol + el.strokeWidth;
     for (let j = 1; j < pts.length; j++) if (distToSeg(p.x, p.y, pts[j - 1][0], pts[j - 1][1], pts[j][0], pts[j][1]) <= tol + el.strokeWidth) return true;
     return false;
@@ -203,6 +203,29 @@ export function resolvedPoints(doc, el) {
   return pts;
 }
 
+// A Catmull-Rom curve through every point, as short straight steps: how a curved line
+// (roundness set) is drawn, hit and labelled. excalidraw.com draws the same kind of curve
+// (rough.js's curve through the points). Never stored: the file keeps only the points.
+export function curveThrough(pts, steps = 12) {
+  if (pts.length < 3) return pts.map(p => [...p]);
+  const out = [[...pts[0]]];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] ?? pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] ?? pts[i + 1];
+    for (let k = 1; k <= steps; k++) {
+      const t = k / steps, t2 = t * t, t3 = t2 * t;
+      const f = (a, b, c, d) => 0.5 * (2 * b + (c - a) * t + (2 * a - 5 * b + 4 * c - d) * t2 + (3 * b - a - 3 * c + d) * t3);
+      out.push([f(p0[0], p1[0], p2[0], p3[0]), f(p0[1], p1[1], p2[1], p3[1])]);
+    }
+  }
+  return out;
+}
+
+// The line as drawn: bound ends resolved, curved through its points when it's a curve.
+export function drawnPoints(doc, el) {
+  const pts = resolvedPoints(doc, el);
+  return el.roundness && !el.elbowed && el.type !== "freedraw" ? curveThrough(pts) : pts;
+}
+
 // Excalidraw's `fixedPoint` for an elbow end at world point p: where it sits on the bound
 // shape, as a fraction of the shape's unrotated box (past 0..1 when the end keeps a gap off
 // the outline). excalidraw.com re-routes elbows from it; an elbow binding without one gets
@@ -263,7 +286,7 @@ function labelBox(doc, label, host) {
   const lh = label.lineHeight ?? 1.25;
   let c, lines;
   if (isLinear(host)) {
-    const pts = resolvedPoints(doc, host); if (pts.length < 2) return null;
+    const pts = drawnPoints(doc, host); if (pts.length < 2) return null;
     const m = alongPath(pts); c = { x: m[0], y: m[1] }; lines = String(label.text ?? "").split("\n");
   } else { c = center(bbox({ ...host, angle: 0 })); lines = labelLines(label, host); }
   const width = Math.max(1, ...lines.map(l => textSize(l, label.fontSize, lh, label.fontFamily).w)), height = lines.length * label.fontSize * lh;

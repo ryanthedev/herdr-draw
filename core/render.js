@@ -7,7 +7,7 @@
 // Colors arrive as #rrggbb or #rrggbbaa; the theme decides what "default ink" is.
 
 import { DEFAULT_STROKE, isShape, isLinear, isLabel, textSize } from "./model.js";
-import { bbox, resolvedPoints, toWorld, angleOf, centerOf, alongPath } from "./geometry.js";
+import { bbox, resolvedPoints, drawnPoints, toWorld, angleOf, centerOf, alongPath } from "./geometry.js";
 import { animState } from "./anim.js";
 import { labelLines, textWidth } from "./text.js";
 import { cornerRadius, roundPolygon, fillLines, arrowheadCmds, fontClass } from "./style.js";
@@ -84,6 +84,36 @@ function sketch(cmds, pts, r, rough, closed) {
   }
 }
 
+// Lines and arrows: one pass whose ends sit exactly on their points (so arrowheads meet the
+// shaft), each straight run bowed a little; "loose" (roughness 2) adds a second pass.
+// Curves arrive as many short steps (curveThrough) and are drawn clean.
+function sketchLine(cmds, pts, r, rough, curved) {
+  cmds.push(["M", ...pts[0]]);
+  if (curved || rough <= 0) { for (let i = 1; i < pts.length; i++) cmds.push(["L", ...pts[i]]); return; }
+  const passes = rough >= 1.5 ? 2 : 1;
+  for (let pass = 0; pass < passes; pass++) {
+    if (pass) cmds.push(["M", ...pts[0]]);
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], z = pts[i], dx = z[0] - a[0], dy = z[1] - a[1], len = Math.hypot(dx, dy) || 1;
+      const bow = (r() - 0.5) * Math.min(len * 0.02, 3) * rough * (pass ? 1.6 : 1);
+      cmds.push(["Q", z[0], z[1], a[0] + dx / 2 - (dy / len) * bow, a[1] + dy / 2 + (dx / len) * bow]);
+    }
+  }
+}
+
+// The point `d` back along a polyline from its last point: where an arrowhead aims from,
+// so a head on a curve follows the curve, not its last tiny step.
+export function pointBack(pts, d) {
+  let left = d;
+  for (let i = pts.length - 1; i > 0; i--) {
+    const a = pts[i - 1], z = pts[i], seg = Math.hypot(z[0] - a[0], z[1] - a[1]);
+    if (seg >= left) { const k = seg ? left / seg : 0; return [z[0] + (a[0] - z[0]) * k, z[1] + (a[1] - z[1]) * k]; }
+    left -= seg;
+  }
+  return pts[0];
+}
+const pathLength = pts => { let n = 0; for (let i = 1; i < pts.length; i++) n += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]); return n; };
+
 function smooth(cmds, pts) {
   cmds.push(["M", ...pts[0]]);
   for (let i = 1; i < pts.length; i++) cmds.push(["Q", (pts[i - 1][0] + pts[i][0]) / 2, (pts[i - 1][1] + pts[i][1]) / 2, pts[i - 1][0], pts[i - 1][1]]);
@@ -115,7 +145,7 @@ export function paintElement(doc, el, P, view, theme, out, opts = {}) {
       const box = doc.get(el.containerId); if (!box) return;
       let b = bbox(box);
       if (isLinear(box)) {   // a line's label sits halfway along its path (elbows included)
-        const m = alongPath(resolvedPoints(doc, box)), lw = Math.max(40, textSize(el.text, el.fontSize, 1.25, el.fontFamily).w), lh = el.fontSize * 1.4;
+        const m = alongPath(drawnPoints(doc, box)), lw = Math.max(40, textSize(el.text, el.fontSize, 1.25, el.fontFamily).w), lh = el.fontSize * 1.4;
         b = { x: m[0] - lw / 2, y: m[1] - lh / 2, w: lw, h: lh };
       }
       const [x0, y0] = Q(b.x, b.y), [x1, y1] = Q(b.x + b.w, b.y + b.h);
@@ -168,7 +198,7 @@ export function paintElement(doc, el, P, view, theme, out, opts = {}) {
   }
 
   if (isLinear(el) && stroke) {
-    let pts = resolvedPoints(doc, el).map(p => Q(p[0], p[1]));
+    let pts = (el.type === "freedraw" ? resolvedPoints(doc, el) : drawnPoints(doc, el)).map(p => Q(p[0], p[1]));
     pts = trim(pts, progress);
     const cmds = [];
     if (el.type === "freedraw") {
@@ -177,14 +207,16 @@ export function paintElement(doc, el, P, view, theme, out, opts = {}) {
       out.push({ t: "path", id: el.id, cmds, stroke, width: Math.max(1, width * 1.1), dash: null, opacity });
       return;
     }
-    if (el.roundness && pts.length > 2) smooth(cmds, pts);   // Excalidraw's curved lines
-    else sketch(cmds, pts, r, rough, false);
+    if (pts.length < 2) return;
+    sketchLine(cmds, pts, r, rough, !!el.roundness && !el.elbowed);
     out.push({ t: "path", id: el.id, cmds, stroke, width, dash, opacity });
-    if (pts.length >= 2 && progress >= 1) {
+    if (progress >= 1) {
       const strokes = [], fills = [];
-      for (const [type, from, to] of [[el.endArrowhead, pts[pts.length - 2], pts[pts.length - 1]], [el.startArrowhead, pts[1], pts[0]]]) {
-        if (!type) continue;
-        const h = arrowheadCmds(type, from, to, 18 * s); strokes.push(...h.strokes); fills.push(...h.fills);
+      // Heads grow with the stroke (as in Excalidraw) and never take more than a third of a short line.
+      const size = Math.min((12 + 3 * el.strokeWidth) * s, pathLength(pts) / 3);
+      for (const [type, line] of [[el.endArrowhead, pts], [el.startArrowhead, [...pts].reverse()]]) {
+        if (!type || size < 1) continue;
+        const to = line[line.length - 1], h = arrowheadCmds(type, pointBack(line, size), to, size); strokes.push(...h.strokes); fills.push(...h.fills);
       }
       if (fills.length) out.push({ t: "path", id: el.id, cmds: fills, fill: stroke, opacity });
       if (strokes.length) out.push({ t: "path", id: el.id, cmds: strokes, stroke, width, dash: null, opacity });

@@ -73,7 +73,7 @@ export const ARROWHEADS = ["arrow", "triangle", "triangle_outline", "dot", "circ
 export function arrowheadCmds(type, from, to, size) {
   const strokes = [], fills = [];
   const dx = to[0] - from[0], dy = to[1] - from[1], len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len;
-  const L = Math.min(size, len * 0.5), a = Math.atan2(dy, dx);
+  const L = Math.min(size, len), a = Math.atan2(dy, dx);   // callers aim from `size` back along the line
   const at = (back, side) => [to[0] - ux * back - uy * side, to[1] - uy * back + ux * side];
   const poly = (pts, filled) => { const c = pts.map((p, i) => [i ? "L" : "M", p[0], p[1]]); if (filled) fills.push(...c); else strokes.push(...c, ["L", pts[0][0], pts[0][1]]); };
   switch (type) {
@@ -94,8 +94,8 @@ export function arrowheadCmds(type, from, to, size) {
       poly([to, at(L * 0.5, w), at(L, 0), at(L * 0.5, -w)], type === "diamond");
       break;
     }
-    default:   // "arrow": two strokes
-      for (const d of [-0.45, 0.45]) strokes.push(["M", to[0], to[1]], ["L", to[0] - Math.cos(a + d) * L, to[1] - Math.sin(a + d) * L]);
+    default:   // "arrow": one stroke wing, tip, wing, so the tip is a clean join
+      strokes.push(["M", to[0] - Math.cos(a - 0.45) * L, to[1] - Math.sin(a - 0.45) * L], ["L", to[0], to[1]], ["L", to[0] - Math.cos(a + 0.45) * L, to[1] - Math.sin(a + 0.45) * L]);
   }
   return { strokes, fills };
 }

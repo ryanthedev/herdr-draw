@@ -34,7 +34,7 @@ test("arrowhead types: filled ones fill, outlines and bars stroke", () => {
   expect(f("triangle_outline").fills.length).toBe(0);
   expect(f("dot").fills.length).toBeGreaterThan(0);
   expect(f("bar").strokes.length).toBe(2);
-  expect(f("arrow").strokes.length).toBe(4);
+  expect(f("arrow").strokes.map(c => c[0]).join("")).toBe("MLL");   // one stroke: wing, tip, wing
   expect(fontClass(1)).toBe("hand"); expect(fontClass(5)).toBe("hand"); expect(fontClass(3)).toBe("mono"); expect(fontClass(2)).toBe("sans");
 });
 
@@ -55,8 +55,8 @@ test("an excalidraw.com file renders with its styles", () => {
   const fills = byId("a1").filter(i => i.fill);
   expect(fills.length).toBe(1);
   expect(fills[0].cmds.filter(c => c[0] === "M").length).toBe(2);
-  // Rounded multi-point line is smooth (quadratic segments), with bar + diamond outline heads.
-  expect(byId("l1")[0].cmds.some(c => c[0] === "Q")).toBe(true);
+  // Rounded multi-point line is a smooth curve (many short steps through its points), with bar + diamond outline heads.
+  expect(byId("l1")[0].cmds.length).toBeGreaterThan(20);
   // Fonts: Excalifont label → hand; Cascadia text → mono.
   expect(items.find(i => i.id === "t1").font).toBe("hand");
   expect(items.find(i => i.id === "t1").color).toBe(THEME.fg);   // on hachure the background shows through: theme ink, not dark
