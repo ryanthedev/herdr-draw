@@ -4,9 +4,9 @@ For the next session picking this up. Read `CLAUDE.md` first (architecture, port
 
 ## Where it stands
 
-- All work is committed locally on `main` and **not pushed** (no remote yet). Latest: library (see `git log`).
+- All work is committed locally on `main` and **not pushed** (no remote yet). Latest: third session (see `git log`).
 - `bun test`: 131 tests, all passing. Snapshots in `test/out/*.png`.
-- Installed into `~/.config/herdr-app/mods/herdr-draw` (via `scripts/dev-sync.sh`); `drawh` is on PATH (`~/.local/bin/drawh` → the installed copy).
+- The person's install (`~/.config/herdr-app/mods/herdr-draw`, and `drawh` on PATH via `~/.local/bin/drawh`) is **behind**: see below.
 
 Built so far (commit order):
 1. Core / adapter split, headless test rig (fake GPUI with expiring contexts and a focus model), SVG export.
@@ -19,6 +19,10 @@ Built so far (commit order):
 8. Images (2026-11-08, second session): Excalidraw `image` elements + `files`; drop or ⌘V in the pane, `drawh image` for agents;
    aspect-locked resize (shift frees), copy/paste with files, SVG export embeds them. Board I/O now handles files over 1 MiB
    (`adapters/herdr/io.js`): Herdr's `readTextFile` caps at 1 MiB, which photo boards pass at once.
+9. PNG export, library (2026-11-08, second session).
+10. Third session (2026-11-08): files open right in excalidraw.com (elbow `fixedPoint`s, label boxes, drawh settles arrows and
+    grows shapes), arrow labels travel with copy/duplicate/library, per-glyph text widths for the pane's fonts, boards over
+    8 MiB open. Checked against the real excalidraw.com with `scripts/excalidraw-probe.mjs` and live in the isolated Herdr.
 
 ## Main Herdr window (the person's): installed build is behind
 
@@ -52,7 +56,7 @@ Window `31533` / `~/.cache/eht` belongs to the engram agent: leave it alone.
 1. **Image loose ends.** Not verified live: ⌘V of a clipboard picture (osascript «class PNGf»), drag-and-drop (`on_drop`), and the
    pane's own save of a >1 MiB board (tested headless with real shell commands only). theGrid key presses to the test window
    (id from `window_find --pid`) did not reach the pane, even after `herdr-app do herdr-draw.focus`; find another way before retrying.
-   Also open: binding arrows to images (only shapes bind). Boards over 8 MiB (exec's output cap) now open: perl splits them
+   Boards over 8 MiB (exec's output cap) now open: perl splits them
    into character-safe parts read with readTextFile (third session; verified live with a 9.4 MB photo board, an agent's
    write picked up while open). Limit 64 MiB.
    Verified (2026-11-08, probe): a drawh board with a PNG and a JPEG opens in excalidraw.com with both pictures, and an arrow
@@ -101,7 +105,10 @@ drags that element down 150 px. Use it for any "does it open right in excalidraw
    wrap to their box and the boxes fit. Caveats: if Excalifont/Virgil is installed the pane's hand face changes and the hand
    table (Chalkboard SE) is off by a few %; a person's terminal mono font wider than 0.6 em would overflow slightly.
    `wrapLines` is guarded against zero/broken widths (an automated security review flagged a possible endless loop).
-6. Networking (deferred by the person): another `onOp` / `receive` pair; presence already renders from `editor.peers`.
+6. Small, open: excalidraw.com puts an arrow label at the route's middle point (on a 3-point elbow, the bend); we put it
+   halfway along the length, so the label jumps once someone edits the arrow there. Free text written by drawh keeps
+   Python's rough width (labels are redone by core; free text isn't).
+7. Networking (deferred by the person): another `onOp` / `receive` pair; presence already renders from `editor.peers`.
 
 ## Rules the person set
 
