@@ -883,15 +883,15 @@ export class Editor {
       for (const e of els) {
         const c = tx.get(e.id);
         for (const [k, v] of Object.entries(patch)) {
-          if (k === "fontSize") {
-            if (c.type === "text") { c.fontSize = v; const host = c.containerId && tx.get(c.containerId); if (host && isShape(host)) this.fitHost(host, c); }
+          if (k === "fontSize" || k === "fontFamily") {   // text takes its new size; a shape grows to fit its label
+            if (c.type === "text") {
+              c[k] = v;
+              const host = c.containerId && tx.get(c.containerId);
+              if (host && isShape(host)) this.fitHost(host, c);
+              else if (!c.containerId) { const sz = textSize(c.text, c.fontSize, c.lineHeight, c.fontFamily); c.width = sz.w; c.height = sz.h; }
+            }
             const l = isShape(e) && this.doc.labelOf(e);
-            if (l) { const cl = tx.get(l.id); cl.fontSize = v; this.fitHost(c, cl); }
-            continue;
-          }
-          if (k === "fontFamily") {
-            if (c.type === "text") c.fontFamily = v;
-            const l = isShape(e) && this.doc.labelOf(e); if (l) tx.get(l.id).fontFamily = v;
+            if (l) { const cl = tx.get(l.id); cl[k] = v; this.fitHost(c, cl); }
             continue;
           }
           if ((k === "backgroundColor" || k === "fillStyle") && !isShape(c)) continue;

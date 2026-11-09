@@ -1,5 +1,5 @@
 import { test, expect, afterAll } from "bun:test";
-import { wrapLines, labelLines, textWidth } from "../core/text.js";
+import { wrapLines, labelLines, textWidth, labelHostHeight } from "../core/text.js";
 import { setup, THEME } from "./harness/fixture.js";
 import { closeRaster } from "./harness/raster.js";
 import { bbox } from "../core/geometry.js";
@@ -118,4 +118,21 @@ test("snapshot: wrapped labels", async () => {
   t.key("escape");
   const svg = await t.shot("wrapped-labels");
   expect(svg).toContain("webhook");
+});
+
+test("switching a label to a wider font refits its shape; free text takes the new width", () => {
+  const t = setup();
+  t.key("r"); t.drag([100, 100], [300, 160]);
+  t.dblclick([200, 130]); t.type("Validate the incoming webhook payload now"); t.key("escape");
+  const [r] = t.byType("rectangle"), h0 = t.ed.doc.get(r.id).height;
+  t.ed.select([r.id]); t.ed.setStyle({ fontFamily: 3 });
+  const host = t.ed.doc.get(r.id), label = t.ed.doc.labelOf(host);
+  expect(host.height).toBeGreaterThan(h0);
+  expect(host.height).toBeGreaterThanOrEqual(labelHostHeight(label, host) - 1e-9);
+  t.key("t"); t.click([500, 400]); t.type("hello world"); t.key("escape");
+  const txt = t.byType("text").find(e => !e.containerId);
+  t.ed.select([txt.id]); t.ed.setStyle({ fontFamily: 3 });
+  expect(t.ed.doc.get(txt.id).width).toBeCloseTo(textWidth("hello world", txt.fontSize, 3), 6);
+  t.ed.setStyle({ fontSize: 40 });
+  expect(t.ed.doc.get(txt.id).width).toBeCloseTo(textWidth("hello world", 40, 3), 6);
 });
