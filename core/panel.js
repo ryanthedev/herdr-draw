@@ -87,6 +87,7 @@ export function applyPanel(state, op) {
       const hidden = hide ? [...s.hidden.filter(x => x !== op.id), op.id] : s.hidden.filter(x => x !== op.id);
       return same(normalizePanel({ ...s, hidden, tab: s.tab === op.id && hide ? null : s.tab }));
     }
+    case "moveOnto": return moveOnto(state, op.id, op.target);
     case "mode": return MODES.includes(op.mode) ? same({ ...s, mode: op.mode }) : state;
     case "tab": return IDS.includes(op.id) && !s.hidden.includes(op.id) ? same({ ...s, tab: op.id, mode: "tabs" }) : state;
     case "addColor": {   // to the person's palette (kind: "stroke" | "fill")
@@ -127,14 +128,11 @@ export function panelSections(state, available = () => true) {
 // Dragging the panel's left edge: the panel sits on the right, so moving left widens it.
 export const dragWidth = (startWidth, startX, x) => clampWidth(startWidth + (startX - x));
 
-// Dragging a section title: where it lands in the full order, given the drawn sections' tops
-// and heights ({ id, top, height }, in drawing order) and the pointer's y.
-export function dropIndex(state, rows, y, movingId) {
-  const s = normalizePanel(state);
-  const others = rows.filter(r => r.id !== movingId);
-  const before = others.find(r => y < r.top + r.height / 2);
-  const rest = s.order.filter(x => x !== movingId);
-  if (before) return rest.indexOf(before.id);
-  const last = others[others.length - 1];
-  return last ? rest.indexOf(last.id) + 1 : rest.length;   // below the last drawn one (hidden ones keep their places)
+// Dragging a section title over another one: the dragged section takes the other's place
+// (below it when coming from above, above it when coming from below), as list reorders feel.
+export function moveOnto(state, id, target) {
+  const s = normalizePanel(state), from = s.order.indexOf(id), at = s.order.indexOf(target);
+  if (from < 0 || at < 0 || from === at) return state;
+  const rest = s.order.filter(x => x !== id), t = rest.indexOf(target);
+  return applyPanel(state, { type: "move", id, to: from < at ? t + 1 : t });
 }

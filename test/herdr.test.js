@@ -1,6 +1,6 @@
 // The real Herdr adapter, driven headless: built mod + fake GPUI + synthetic mouse/keys.
 import { test, expect, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { installFakes, makeCx, byId, find, textOf, canvasToSvg, THEME } from "./harness/gpui-fake.js";
 import { rasterize, closeRaster } from "./harness/raster.js";
@@ -557,4 +557,85 @@ test("with the person's keys.json, labels and help show ⌃ for the ⌘ keys Her
   ui.key("d", { control: true });                                            // ⌃D duplicates
   expect(ui.view.ed.doc.live().length).toBeGreaterThan(n);
   writeFileSync(`${home}/keys.json`, "{}");
+});
+
+// ── the side panel: one layout for every board pane (panel.json) ──────────────────────────────
+const panelStore = () => import(`${ROOT}build/herdr-draw/panel-store.js`);
+const freshPanel = async () => { rmSync(`${home}/herdr-draw/panel.json`, { force: true }); (await panelStore()).resetPanelStore(); };
+const sectionIds = ui => (byId(ui.tree(), "side-scroll")?.children ?? []).map(n => n.style?.id).filter(Boolean);
+const rootFire = (ui, handler, ev) => { const h = ui.tree().handlers[handler]; ui.cx.call(c => h(ev, c)); };
+const at = (x, y = 300) => ({ position: { x, y }, local_position: { x: 0, y: 0 }, modifiers: {}, button: "left" });
+
+test("panel: drag its left edge to resize; the width is saved for every board pane", async () => {
+  await freshPanel();
+  const ui = await open();
+  expect(byId(ui.tree(), "draw-side").style.w).toBe(232);
+  ui.fire("side-edge", "on_mouse_down:left", at(868));
+  rootFire(ui, "on_mouse_move", at(800));
+  rootFire(ui, "on_mouse_move", at(768));
+  expect(byId(ui.tree(), "draw-side").style.w).toBe(332);
+  rootFire(ui, "on_mouse_up:left", at(768));
+  await ui.cx.flush();
+  expect(JSON.parse(readFileSync(`${home}/herdr-draw/panel.json`, "utf8")).width).toBe(332);
+  rootFire(ui, "on_mouse_move", at(500));                                   // drag over: moving no longer resizes
+  expect(byId(ui.tree(), "draw-side").style.w).toBe(332);
+  // Another board pane draws the same panel, and the board keeps its room in a narrow pane.
+  const other = await open({ width: 1100, height: 700 });
+  expect(byId(other.tree(), "draw-side").style.w).toBe(332);
+  other.on("on_size_change", { width: 118, height: 600 });                  // a 450 px pane (118 + the 332 panel)
+  expect(byId(other.tree(), "draw-side").style.w).toBe(250);                // the board keeps 200
+  other.on("on_size_change", { width: 100, height: 600 });                  // a 350 px pane: no room, hidden
+  expect(byId(other.tree(), "draw-side")).toBe(null);
+  await freshPanel();
+});
+
+test("panel: click a title to fold it; drag a title onto another to move it; leaving the pane ends a drag", async () => {
+  await freshPanel();
+  const ui = await open();
+  ui.click("tool-rectangle"); ui.drag([300, 300], [380, 360]);              // a selection: Arrange shows
+  expect(sectionIds(ui).slice(0, 2)).toEqual(["sec-properties", "sec-arrange"]);
+  ui.fire("sec-head-properties", "on_mouse_down:left", at(900));
+  ui.fire("sec-head-properties", "on_mouse_up:left", at(900));
+  rootFire(ui, "on_mouse_up:left", at(900));
+  expect(textOf(byId(ui.tree(), "sec-properties"))).not.toContain("Stroke");
+  expect(textOf(byId(ui.tree(), "sec-head-properties"))).toContain("▸");
+  ui.fire("sec-head-properties", "on_mouse_down:left", at(900));             // and back
+  ui.fire("sec-head-properties", "on_mouse_up:left", at(900));
+  rootFire(ui, "on_mouse_up:left", at(900));
+  expect(textOf(byId(ui.tree(), "sec-properties"))).toContain("Stroke");
+  // Drag Library's title up over Animate and then Arrange.
+  ui.fire("sec-head-library", "on_mouse_down:left", at(900));
+  ui.fire("sec-head-animate", "on_mouse_move", at(900));
+  ui.fire("sec-head-arrange", "on_mouse_move", at(900));
+  ui.fire("sec-head-arrange", "on_mouse_up:left", at(900));                  // a drag, not a click: Arrange stays open
+  rootFire(ui, "on_hover", false);
+  expect(sectionIds(ui).slice(0, 3)).toEqual(["sec-properties", "sec-library", "sec-arrange"]);
+  expect(textOf(byId(ui.tree(), "sec-arrange"))).toContain("▾");
+  await ui.cx.flush();
+  expect(JSON.parse(readFileSync(`${home}/herdr-draw/panel.json`, "utf8")).order.slice(0, 3)).toEqual(["properties", "library", "arrange"]);
+  await freshPanel();
+});
+
+test("panel: tabs show one section at a time; ⚙ hides, reorders and resets sections", async () => {
+  await freshPanel();
+  const ui = await open();
+  ui.click("side-mode");
+  expect(sectionIds(ui)).toEqual(["sec-properties"]);
+  ui.click("tab-layers");
+  expect(sectionIds(ui)).toEqual(["sec-layers"]);
+  expect(byId(ui.tree(), "tab-arrange")).toBe(null);                         // nothing selected: no Arrange tab
+  ui.click("side-mode");                                                     // back to stacked
+  ui.click("side-gear");
+  expect(textOf(byId(ui.tree(), "panel-settings"))).toContain("Library");
+  ui.click("ps-show-animate");                                               // hide Animate
+  ui.click("ps-up-layers");                                                  // Layers above Animate's slot
+  ui.click("ps-show-properties");                                            // Properties can't be hidden
+  ui.click("side-gear");
+  const ids = sectionIds(ui);
+  expect(ids).not.toContain("sec-animate");
+  expect(ids).toContain("sec-properties");
+  expect(ids.indexOf("sec-layers")).toBeLessThan(ids.indexOf("sec-library"));
+  ui.click("side-gear"); ui.click("ps-reset"); ui.click("side-gear");
+  expect(sectionIds(ui)).toContain("sec-animate");
+  await freshPanel();
 });

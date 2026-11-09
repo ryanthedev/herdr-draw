@@ -13,11 +13,15 @@ core/            pure JS, no imports from Herdr, the DOM, Node or the network
   render.js      board → display list (paths + text + images, screen coords)
   export.js      the drawing cropped to what's painted, any pixel ratio, on the board's page color
   boards.js      the board picker's ranking, recent list and new-board names
+  panel.js       the side panel's layout (order, folds, tabs, width, palette); applyPanel(state, op) is the only change
+  color.js       hex / RGB / HSV for the color picker, recent colors
   library.js     .excalidrawlib read (v1, v2) / write (v2); Editor.insertElements is the one insert path (paste, library)
   anim.js        timeline presets / keyframes → per-element state at time t
   editor.js      tools, gestures, selection, undo, layers, align, clipboard, commands
   shortcuts.js   every key for the ? overlay (tested against Editor.key); demo.js: the animated demo board
-adapters/herdr/  the Herdr mod: GPUI events → editor; display list → GPUI. store.js = file port
+adapters/herdr/  the Herdr mod: GPUI events → editor; display list → GPUI. store.js = file port;
+                 panel-store.js = the panel's settings (<appHome>/herdr-draw/panel.json), one module-level copy
+                 every pane shares (Herdr runs a mod's module once for all its copies, AGENTS.md)
 adapters/svg/    display list → SVG (tests, export)
 cli/drawh        the agents' CLI (Python, edits the file; pane picks it up)
 test/            bun test: core with synthetic input; the real Herdr adapter on a fake GPUI
@@ -36,7 +40,7 @@ Herdr-draw data lives where Excalidraw keeps foreign data: `customData.{layer,z,
 
 ## Dev loop
 
-- `bun test` (211 tests). `drawh mermaid` runs core/mermaid.js through node (or bun), so agents and the pane lay out alike. Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
+- `bun test` (225 tests). `drawh mermaid` runs core/mermaid.js through node (or bun), so agents and the pane lay out alike. Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
 - `scripts/dev-sync.sh` builds `build/herdr-draw` (adapter + core + svg + drawh) and installs a **copy** into `~/.config/herdr-app/mods/herdr-draw`.
 - `scripts/install.sh` installs **HEAD** into the person's Herdr (ignores `HERDR_APP_HOME`): run it after commits the person
   should test. If `.git/hooks/post-commit` exists (`scripts/install-hook.sh`), every commit to `main` installs itself. ⌘⇧B opens a scratch board. Their notes: `FEEDBACK.md`.

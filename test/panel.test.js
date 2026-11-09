@@ -1,6 +1,6 @@
 // The side panel's model (core/panel.js) and the color picker's math (core/color.js).
 import { test, expect } from "bun:test";
-import { SECTIONS, WIDTH, CANVAS_MIN, PALETTE_MAX, defaultPanel, parsePanel, serializePanel, applyPanel, panelLayout, panelSections, dragWidth, dropIndex } from "../core/panel.js";
+import { SECTIONS, WIDTH, CANVAS_MIN, PALETTE_MAX, defaultPanel, parsePanel, serializePanel, applyPanel, panelLayout, panelSections, dragWidth, moveOnto } from "../core/panel.js";
 import { normalizeColor, hexToRgb, rgbToHex, hexToHsv, hsvToHex, pushRecentColor, inkOn, RECENT_COLORS_MAX } from "../core/color.js";
 
 const ids = SECTIONS.map(s => s.id);
@@ -75,17 +75,17 @@ test("layout: the board keeps its minimum; the panel narrows, then hides", () =>
   expect(panelLayout(applyPanel(s, { type: "open", open: false }), 1200).show).toBe(false);
 });
 
-test("dragging the left edge widens to the left; dropping a title lands between the rows", () => {
+test("dragging the left edge widens to the left; dragging a title onto another swaps places", () => {
   expect(dragWidth(232, 500, 450)).toBe(282);
   expect(dragWidth(232, 500, 900)).toBe(WIDTH.min);
   const s = defaultPanel();   // properties, arrange, frames, animate, layers, library
-  const rows = [{ id: "properties", top: 0, height: 100 }, { id: "animate", top: 100, height: 40 }, { id: "layers", top: 140, height: 60 }];
-  expect(dropIndex(s, rows, 10, "layers")).toBe(0);                        // above properties
-  expect(dropIndex(s, rows, 130, "properties")).toBe(s.order.filter(x => x !== "properties").indexOf("layers"));
-  // Below the last drawn row: right after it, not after sections that aren't drawn (library).
-  const r = applyPanel(s, { type: "move", id: "properties", to: dropIndex(s, rows, 500, "properties") });
-  expect(r.order.indexOf("properties")).toBe(r.order.indexOf("layers") + 1);
-  expect(r.order.at(-1)).toBe("library");
+  expect(moveOnto(s, "properties", "frames").order.slice(0, 3)).toEqual(["arrange", "frames", "properties"]);   // down: below it
+  expect(moveOnto(s, "library", "frames").order.slice(0, 4)).toEqual(["properties", "arrange", "library", "frames"]);   // up: above it
+  // Dragging down a list one row at a time walks the section down.
+  let r = s; for (const over of ["arrange", "frames", "animate"]) r = moveOnto(r, "properties", over);
+  expect(r.order).toEqual(["arrange", "frames", "animate", "properties", "layers", "library"]);
+  expect(moveOnto(s, "layers", "layers")).toBe(s);
+  expect(moveOnto(s, "layers", "nope")).toBe(s);
 });
 
 test("palette: colors normalized, no duplicates, capped; reset keeps colors", () => {

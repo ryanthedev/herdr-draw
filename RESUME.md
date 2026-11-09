@@ -80,6 +80,19 @@ boards open in excalidraw.com in Safari; a canvas adapter on core (touch → poi
   takes stay on ⌃ inside boards. New board shortcuts use ⌘ keys free in their keys.json, or ⌃.
 - Frames as pages: side panel "Frames" (reading order, click to show one), PgDn/PgUp step and wrap.
 
+## Side panel (2026-11-09, sixth session; the person asked for resize, pop-out, collapse, tabs, own colors)
+
+Plan (advisor-reviewed), one commit per phase: (1) core model + color math ✓ (2) resize, fold, reorder ✓ (3) tabs ✓
+(4) color picker + the person's palette (5) pop-out as a Herdr floating window (`openOverlay({kind: "window", key, keep})`).
+- Hand-built, not Herdr's DockArea: the fake GPUI can't draw DockArea/h_resizable/Tabs, and DockArea keeps layout outside core.
+- Settings are the person's, not per pane: `<appHome>/herdr-draw/panel.json` via `panel-store.js` (module state shared by
+  every copy; `panelChanged()` wakes each pane's own spawn loop, so no pane holds another's cx). I still hides it per pane.
+- Reorder = drag a title onto another (no row positions needed: GPUI doesn't report scroll offsets), or ⚙ ↑ ↓.
+- Pop-out caveats to honor: the panel copy must not own an Editor or a FileStore (it drives the board pane's editor through
+  a module-level registry keyed by pane); in a floating window every control must stop_propagation on mouse down or the
+  press drags the window; a pop-out on a newer build than its board pane finds no editor (say so, don't draw blank).
+  Windows close on a layout switch; `keep: true` with a `key` reopens them.
+
 ## How to verify in real Herdr (never the person's window)
 
 Isolated home `~/.cache/hdt` already exists (layout `drawtest` shows only the board, file `~/.cache/hdt/t.excalidraw`):

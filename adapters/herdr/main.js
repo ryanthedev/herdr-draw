@@ -24,6 +24,8 @@ import { SHORTCUTS, takenKeys, fitKeys } from "./core/shortcuts.js";
 import { demoScene } from "./core/demo.js";
 import { rankBoards, newBoardPath, parseRecent, pushRecent, parseListing, boardName, folderOf, tilde } from "./core/boards.js";
 import { emptyScene } from "./core/model.js";
+import { panelLayout, panelSections, dragWidth, titleOf, WIDTH } from "./core/panel.js";
+import { panelState, loadPanel, changePanel, savePanel, panelChanged } from "./panel-store.js";
 
 const MOD = "herdr-draw";
 // Boards: new ones go in ~/boards; the recent list is shared by every board pane.
@@ -32,7 +34,6 @@ const RECENT = () => `${appHome()}/herdr-draw/recent.json`;
 const PICK_ROWS = 12;
 const Z = () => Number(settings().zoom) || 1;
 const CACHE = () => `${home()}/.cache/herdr-draw`;
-const SIDEBAR = 232;
 const ALIGN = [["left", "⇤", "⌥A"], ["hcenter", "↔", "⌥H"], ["right", "⇥", "⌥D"], ["top", "⤒", "⌥W"], ["vcenter", "↕", "⌥V"], ["bottom", "⤓", "⌥S"]];
 const BADGES_MIN_W = 640;   // narrower than this, the toolbar shows icons only (keys stay in tooltips and ?)
 const isHelpKey = e => e.key === "?" || e.key_char === "?" || (e.key === "/" && !!e.modifiers?.shift && !e.modifiers?.platform);
@@ -160,6 +161,12 @@ export default class Draw extends View {
     this.lib = new LibraryStore({ onChange: () => { this.previews.clear(); }, onError: m => { this.flash = m; } });
     this.previews = new Map();   // library item id → its preview's path layers
     cx.spawn(async acx => { await this.lib.start(acx); });
+    // The side panel's settings are every pane's (panel-store.js): redraw when any pane changes them.
+    this.sideW = 0;           // the panel's width as last drawn (0: hidden)
+    this.panelDrag = null;    // dragging the panel's edge: { x, w }
+    this.secDrag = null;      // dragging a section title: { id, moved }
+    this.customize = false;   // the panel shows its own settings
+    cx.spawn(async acx => { await loadPanel(); acx.notify(); for (;;) { await panelChanged(); acx.notify(); } });
     if (this.file) this.startStore(cx);
     else cx.timer.after(30, cx => { this.openPicker(cx); cx.notify(); });   // no board yet (⌘⇧B): pick one
     cx.spawn(async cx => {
@@ -575,14 +582,20 @@ export default class Draw extends View {
   render(cx) {
     const t = theme();
     this.ensureImages(cx);
-    const showSide = this.sidebar && this.size.w > 360;
+    const side = panelLayout({ ...panelState(), open: this.sidebar }, this.size.w + this.sideW);
+    this.sideW = side.width;
     cx.spawn(async acx => { await this.drawRotated(acx); await this.loadPreviews(acx); });   // after this frame: rotated text PNGs, picker previews
     return v_flex().id("draw").size_full().min_h(0).bg(t.background).text_color(t.foreground)
       .track_focus(this.handle).on_key_down((e, cx) => this.keys(e, cx))
+      // Panel drags (its edge, a section title) follow the pointer anywhere in the pane; GPUI has no
+      // release outside it, so leaving the pane ends them.
+      .on_mouse_move((e, cx) => this.panelMove(e, cx))
+      .on_mouse_up("left", (_e, cx) => this.panelDragEnd(cx))
+      .on_hover((hovered, cx) => { if (!hovered) this.panelDragEnd(cx); })
       .child(this.toolbar(t))
       .child(h_flex().flex_1().min_h(0).w_full()
         .child(this.canvas(t))
-        .when(showSide, el => el.child(this.sidePanel(t))))
+        .when(side.show, el => el.child(this.sidePanel(t, side.width))))
       .when(this.ed.duration() > 1 || !!this.ed.play, el => el.child(this.timeline(t)));
   }
 
@@ -596,7 +609,7 @@ export default class Draw extends View {
   toolbar(t) {
     const ed = this.ed, name = (this.file ?? "").split("/").pop();
     const status = this.error ?? this.flash ?? ed.flash ?? `${ed.doc.visible().filter(e => !isLabel(e)).length} elements`;
-    const badges = this.size.w + (this.sidebar ? SIDEBAR : 0) >= BADGES_MIN_W;
+    const badges = this.size.w + this.sideW >= BADGES_MIN_W;
     // Each tool shows its key beside its icon (as Excalidraw does), unless the pane is narrow.
     const labelled = (icon, key, size = 14) => h_flex().items_center().gap(2).child(div().text_size(size).child(icon))
       .when(badges && !!key, e => e.child(div().text_size(9).opacity(0.65).child(key)));
@@ -811,21 +824,114 @@ export default class Draw extends View {
 
   // ── panels ─────────────────────────────────────────────────────────────
 
-  section(t, title, body) {
-    return v_flex().w_full().gap(6).px(10).py(8).border_b(1).border_color(t.border)
-      .child(div().text_size(10).text_color(t.dim).font_semibold().child(title.toUpperCase()))
-      .child(body);
+  // A section's title and body; sidePanel draws them (stacked with a foldable title, or as a tab).
+  section(_t, title, body) { return { title, body }; }
+
+  sectionContent(t, id) {
+    return ({ properties: () => this.properties(t), arrange: () => this.arrange(t), frames: () => this.framesPanel(t),
+      animate: () => this.animatePanel(t), layers: () => this.layersPanel(t), library: () => this.libraryPanel(t) })[id]?.() ?? null;
   }
 
-  sidePanel(t) {
-    return v_flex().id("draw-side").w(SIDEBAR).h_full().flex_shrink_0().border_l(1).border_color(t.border).bg(t.surface ?? t.background).overflow_y_scroll()
-      .child(this.properties(t))
-      .child(this.arrange(t))
-      .child(this.framesPanel(t))
-      .child(this.animatePanel(t))
-      .child(this.layersPanel(t))
-      .child(this.libraryPanel(t));
+  // Whether a section has anything to show now (no selection: nothing to arrange).
+  sectionAvailable(id) {
+    if (id === "arrange") return this.ed.sel.size > 0;
+    if (id === "frames") return this.ed.frames().length > 0;
+    return true;
   }
+
+  // The panel: a drag edge on its left, a bar (tabs, stack/tabs, fold all, settings), then the
+  // sections in the person's order. Its layout is the same in every board pane (panel-store.js).
+  sidePanel(t, width) {
+    const st = panelState(), rows = panelSections(st, id => this.sectionAvailable(id));
+    const content = this.customize ? [this.panelSettings(t, st)]
+      : rows.filter(r => r.active).map(r => this.sectionBlock(t, r, st.mode)).filter(Boolean);
+    return h_flex().id("draw-side").w(width).h_full().flex_shrink_0().bg(t.surface ?? t.background)
+      .child(div().id("side-edge").w(5).h_full().flex_shrink_0().border_l(1).border_color(this.panelDrag ? t.accent : t.border)
+        .cursor_col_resize().hover(s => s.bg(withAlpha(t.accent, 0.25))).tooltip("Drag to resize the panel")
+        .on_mouse_down("left", (e, cx) => { this.panelDrag = { x: this.px(e), w: width }; cx.stop_propagation(); cx.notify(); }))
+      .child(v_flex().flex_1().min_w(0).h_full()
+        .child(this.panelBar(t, st, rows))
+        .child(v_flex().id("side-scroll").w_full().flex_1().min_h(0).overflow_y_scroll().children(content)));
+  }
+
+  panelBar(t, st, rows) {
+    const tabs = st.mode === "tabs" && !this.customize;
+    const bar = h_flex().id("side-bar").w_full().flex_shrink_0().gap(4).px(6).py(5).items_center().border_b(1).border_color(t.border);
+    if (tabs) bar.child(h_flex().flex_1().min_w(0).flex_wrap().gap(3).children(rows.map(r =>
+      this.chip(t, `tab-${r.id}`, r.title, r.active, `Show ${r.title}`, () => changePanel({ type: "tab", id: r.id }), 30))));
+    else bar.child(div().flex_1().text_size(10).text_color(t.dim).font_semibold().child(this.customize ? "PANEL SETTINGS" : ""));
+    return bar
+      .when(!this.customize, b => b
+        .child(this.chip(t, "side-mode", tabs ? "☰" : "▭", false, tabs ? "Show every section, one under another" : "Show one section at a time, as tabs",
+          () => changePanel({ type: "mode", mode: tabs ? "stack" : "tabs" })))
+        .when(!tabs, b => b.child(this.chip(t, "side-fold", rows.some(r => !r.folded) ? "⊟" : "⊞", false, "Fold or unfold every section",
+          () => changePanel({ type: "foldAll", folded: rows.some(r => !r.folded) })))))
+      .child(this.chip(t, "side-gear", this.customize ? "done" : "⚙", this.customize, this.customize ? "Back to the panel" : "Panel settings: sections, order, layout",
+        () => { this.customize = !this.customize; }, this.customize ? 40 : 26));
+  }
+
+  // One section, stacked: a title to fold it (click) or move it (drag onto another title), then its body.
+  sectionBlock(t, r, mode) {
+    const c = this.sectionContent(t, r.id);
+    if (!c) return null;
+    const body = div().w_full().px(10).pb(8).pt(mode === "tabs" ? 8 : 0).child(c.body);
+    if (mode === "tabs") return v_flex().id(`sec-${r.id}`).w_full().child(body);
+    const dragging = this.secDrag?.moved && this.secDrag.id === r.id;
+    const head = h_flex().id(`sec-head-${r.id}`).w_full().h(26).px(8).gap(5).items_center().cursor_pointer()
+      .bg(dragging ? withAlpha(t.accent, 0.16) : CLEAR).hover(s => s.bg(t.hover))
+      .tooltip("Click to fold · drag onto another title to move")
+      .on_mouse_down("left", (_e, cx) => { this.secDrag = { id: r.id, moved: false }; cx.stop_propagation(); })
+      .on_mouse_move((_e, cx) => {
+        const d = this.secDrag;
+        if (!d || d.id === r.id) return;
+        d.moved = true;
+        if (changePanel({ type: "moveOnto", id: d.id, target: r.id }, { save: false })) cx.notify();
+      })
+      .on_mouse_up("left", (_e, cx) => {
+        if (this.secDrag?.id === r.id && !this.secDrag.moved) { changePanel({ type: "fold", id: r.id }); cx.notify(); }
+      })
+      .child(div().w(10).text_size(10).text_color(t.dim).child(r.folded ? "▸" : "▾"))
+      .child(div().flex_1().min_w(0).truncate().text_size(10).text_color(t.dim).font_semibold().child(c.title.toUpperCase()));
+    return v_flex().id(`sec-${r.id}`).w_full().border_b(1).border_color(t.border).child(head).when(!r.folded, el => el.child(body));
+  }
+
+  // ⚙: which sections show and in what order, stacked or tabs, width presets, reset.
+  panelSettings(t, st) {
+    const n = st.order.length;
+    const rows = st.order.map((id, i) => h_flex().id(`ps-${id}`).w_full().h(26).gap(4).items_center()
+      .child(this.chip(t, `ps-show-${id}`, st.hidden.includes(id) ? "☐" : "☑", false, id === "properties" ? "Properties always shows" : "Show or hide this section",
+        () => changePanel({ type: "hide", id })))
+      .child(div().flex_1().text_size(12).text_color(st.hidden.includes(id) ? t.dim : t.foreground).child(titleOf(id)))
+      .child(this.chip(t, `ps-up-${id}`, "↑", false, "Move up", () => changePanel({ type: "move", id, to: Math.max(0, i - 1) })))
+      .child(this.chip(t, `ps-down-${id}`, "↓", false, "Move down", () => changePanel({ type: "move", id, to: Math.min(n - 1, i + 1) }))));
+    const label = s => div().text_size(10).text_color(t.dim).font_semibold().mt(6).child(s);
+    return v_flex().id("panel-settings").w_full().gap(4).px(10).py(8)
+      .child(label("SECTIONS"))
+      .children(rows)
+      .child(label("LAYOUT"))
+      .child(h_flex().gap(4)
+        .child(this.chip(t, "ps-stack", "stacked", st.mode === "stack", "Every section, one under another", () => changePanel({ type: "mode", mode: "stack" }), 56))
+        .child(this.chip(t, "ps-tabs", "tabs", st.mode === "tabs", "One section at a time", () => changePanel({ type: "mode", mode: "tabs" }), 44)))
+      .child(label("WIDTH · or drag the panel's left edge"))
+      .child(h_flex().gap(4).children([["narrow", WIDTH.min], ["normal", WIDTH.default], ["wide", 320], ["wider", 420]].map(([lab, w]) =>
+        this.chip(t, `ps-w-${lab}`, lab, st.width === w, `${w} px`, () => changePanel({ type: "width", width: w }), 44))))
+      .child(div().mt(8).child(this.chip(t, "ps-reset", "reset layout", false, "Default order, width and folds (your colors stay)", () => changePanel({ type: "reset" }), 80)));
+  }
+
+  // Panel drags, from the pane's root: the edge follows the pointer; a title drag ends here.
+  panelMove(e, cx) {
+    const d = this.panelDrag;
+    if (!d) return;
+    if (changePanel({ type: "width", width: dragWidth(d.w, d.x, this.px(e)) }, { save: false })) cx.notify();
+  }
+  panelDragEnd(cx) {
+    if (!this.panelDrag && !this.secDrag) return;
+    this.panelDrag = null; this.secDrag = null;
+    savePanel();
+    cx.notify();
+  }
+  // A pointer's x in zoom-1 px, window-relative (the edge moves, so its own coordinates won't do).
+  px(e) { return (e.position?.x ?? e.local_position?.x ?? 0) / Z(); }
 
   // A chip's label with its key after it, small and dim.
   keyed(t, label, key) { return h_flex().gap(3).items_center().child(div().child(label)).child(div().text_size(9).text_color(t.dim).child(this.kk(key))); }
@@ -884,7 +990,7 @@ export default class Draw extends View {
 
   arrange(t) {
     const ed = this.ed;
-    if (!ed.sel.size) return div();
+    if (!ed.sel.size) return null;
     const body = v_flex().gap(6)
       .child(h_flex().flex_wrap().gap(4).children(ALIGN.map(([how, icon, key]) => this.chip(t, `al-${how}`, this.keyed(t, icon, key), false, `Align ${how} (${key})`, () => ed.align(how)))))
       .child(h_flex().flex_wrap().gap(4)
@@ -910,7 +1016,7 @@ export default class Draw extends View {
   // Frames as pages: each frame in reading order; a click shows it, PgDn/PgUp step through them.
   framesPanel(t) {
     const ed = this.ed, fs = ed.frames();
-    if (!fs.length) return div();
+    if (!fs.length) return null;
     const rows = fs.map((f, i) => h_flex().id(`fr-${f.id}`).w_full().h(26).px(6).gap(6).items_center().rounded(5).cursor_pointer()
       .bg(ed.frameAt === f.id ? withAlpha(t.accent, 0.16) : CLEAR).hover(s => s.bg(t.hover))
       .on_click((_e, cx) => { ed.goToFrame(f.id); this.handle.focus(); this.after(cx); })
@@ -966,7 +1072,7 @@ export default class Draw extends View {
   timeline(t) {
     const ed = this.ed, dur = ed.duration(), now = ed.time();
     const frac = now == null ? 0 : Math.max(0, Math.min(1, now / dur));
-    const trackW = Math.max(40, this.size.w + (this.sidebar && this.size.w > 360 ? SIDEBAR : 0) - 230);
+    const trackW = Math.max(40, this.size.w + this.sideW - 230);
     return h_flex().id("draw-timeline").w_full().h(34).px(10).gap(10).items_center().border_t(1).border_color(t.border).bg(t.surface ?? t.background).flex_shrink_0()
       .child(this.chip(t, "tl-play", ed.play ? "❚❚" : "▶", !!ed.play, "Play / pause (⇧space)", () => ed.playToggle()))
       .child(this.chip(t, "tl-stop", "■", false, "Back to editing (esc)", () => ed.stopPlay()))
