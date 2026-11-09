@@ -4,6 +4,14 @@
 // A board is any *.excalidraw file. Paths are absolute; `home` shortens them for display.
 
 export const BOARD = /\.excalidraw(\.json)?$/i;
+
+// A board on another machine (a Herdr space's machine) is "machine:/abs/path" in the recent list
+// and the picker; one on this machine is just its path. Paths start with "/", so the two can't mix.
+export const boardRef = (path, machine = null) => (machine ? `${machine}:${path}` : path);
+export function parseRef(ref) {
+  const m = /^([^/:\s]+):(\/.*)$/.exec(String(ref ?? ""));
+  return m ? { machine: m[1], path: m[2] } : { machine: null, path: String(ref ?? "") };
+}
 export const RECENT_MAX = 30;
 
 export const boardName = p => String(p).split("/").pop().replace(BOARD, "");
@@ -32,14 +40,17 @@ function score(q, s) {
 
 // Rows for the picker: { path, name, folder, recent }. The name counts more than the folder.
 // No query: recent boards (newest first), then the rest by modification time (newest first).
-export function rankBoards(query, files, recent = [], { home = "", current = null } = {}) {
+// Paths may be refs (boardRef): a board on another machine shows its folder as "ska: ~/docs", with
+// `homes[machine]` (that machine's home) shortened to ~.
+export function rankBoards(query, files, recent = [], { home = "", current = null, homes = {} } = {}) {
   const q = String(query ?? "").trim().toLowerCase();
   const seen = new Set(), all = [];
   const mtime = new Map(files.map(f => [f.path, f.mtime ?? 0]));
   for (const p of [...recent, ...files.map(f => f.path)]) if (!seen.has(p)) { seen.add(p); all.push(p); }
   const rows = [];
   for (const path of all) {
-    const name = boardName(path), folder = tilde(folderOf(path), home), ri = recent.indexOf(path);
+    const r = parseRef(path), name = boardName(r.path), ri = recent.indexOf(path);
+    const folder = r.machine ? `${r.machine}: ${tilde(folderOf(r.path), homes[r.machine] ?? "")}` : tilde(folderOf(r.path), home);
     let s = 0;
     if (q) {
       const n = score(q, name.toLowerCase()), f = score(q, `${folder}/${name}`.toLowerCase());

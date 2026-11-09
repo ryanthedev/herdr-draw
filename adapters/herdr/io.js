@@ -25,7 +25,9 @@ async function size(path) {
   return r.code === 0 ? Number(r.stdout.trim()) : null;
 }
 
-export async function readText(path) {
+// `on`: a machine Herdr knows (a space's `machine`), for a board that lives there; null: this one.
+export async function readText(path, { on = null } = {}) {
+  if (on) return (await readRemote(path, on)).text;
   try { return await readTextFile(path); }
   catch (e) {
     const n = await size(path);
@@ -68,7 +70,8 @@ const small = s => s == null || bytes(s) <= SMALL;
 // Writes only if the file still holds `expected` (null: it must not exist). Rejects when
 // stale, like writeTextFile. The big path checks then renames: a writer landing between
 // the two is lost to that check, a narrower window than none.
-export async function writeText(path, text, expected) {
+export async function writeText(path, text, expected, { on = null } = {}) {
+  if (on) return writeRemote(path, text, expected, on);
   if (small(text) && small(expected)) return writeTextFile(path, text, expected);   // atomic check-and-write
   const cur = await readText(path).catch(() => undefined);
   if (cur === undefined || cur !== expected) throw new Error("stale: the file changed since it was read");
@@ -85,4 +88,69 @@ export async function writeText(path, text, expected) {
   const r = await exec("sh", ["-c", 'out="$1"; shift; cat "$@" > "$out.herdr-tmp" && mv "$out.herdr-tmp" "$out"; s=$?; rm -f "$@"; exit $s', "big-write", path, ...parts]);
   if (r.code !== 0) throw new Error(r.stderr || `can't write ${path}`);
   return null;
+}
+
+// ── a board on another machine ─────────────────────────────────────────────────────────────
+// Herdr runs commands there (exec's `on`), but can't write a file there or watch one. So a read
+// is one `cat` that also prints the file's stamp (inode, mtime, size: an atomic replace, ours or
+// drawh's, gives a new inode), a write goes as argument-sized parts into a temp file beside the
+// board and is renamed over it only if the stamp is still the one we read (in one shell, on that
+// machine), and the pane polls the stamp to see other writers. BSD stat: a macOS machine.
+
+const REMOTE_PART = 128 * 1024;   // chars per argument: at most 384 KiB of UTF-8, under macOS's ~1 MiB argv
+const seen = new Map();            // "machine\0path" → { text, stamp } as last read or written
+const key = (on, path) => `${on}\0${path}`;
+const STAT = 'stat -f "%i:%m:%z" "$1" 2>/dev/null || echo none';
+
+async function readRemote(path, on) {
+  const r = await exec("sh", ["-c", `s=$(${STAT}); [ "$s" = none ] && { echo none; exit 0; }; echo "$s"; cat "$1"`, "board-read", path], { on });
+  if (r.code !== 0) throw new Error(r.stderr?.trim() || `can't read ${path} on ${on}`);
+  const nl = r.stdout.indexOf("\n"), stamp = (nl < 0 ? r.stdout : r.stdout.slice(0, nl)).trim();
+  const text = stamp === "none" ? null : r.stdout.slice(nl + 1);
+  seen.set(key(on, path), { text, stamp });
+  return { text, stamp };
+}
+
+// The file's stamp on that machine now ("none": no file).
+export async function remoteStamp(path, on) {
+  const r = await exec("sh", ["-c", STAT, "board-stat", path], { on });
+  if (r.code !== 0) throw new Error(r.stderr?.trim() || `can't reach ${on}`);
+  return r.stdout.trim();
+}
+// Whether the file there changed since this pane last read or wrote it.
+export async function remoteChanged(path, on) {
+  const s = await remoteStamp(path, on);
+  return s !== (seen.get(key(on, path))?.stamp ?? "none");
+}
+
+async function writeRemote(path, text, expected, on) {
+  const last = seen.get(key(on, path));
+  let stamp;
+  if (expected === null) stamp = "none";
+  else if (last && last.text === expected) stamp = last.stamp;
+  else {   // not what we last saw: compare the text itself
+    const now = await readRemote(path, on);
+    if (now.text !== expected) throw new Error("stale: the file changed since it was read");
+    stamp = now.stamp;
+  }
+  const tmp = `${path}.herdr-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  try {
+    for (let i = 0, first = true; first || i < text.length; first = false) {
+      let j = Math.min(text.length, i + REMOTE_PART);
+      const c = text.charCodeAt(j - 1);
+      if (j < text.length && c >= 0xd800 && c <= 0xdbff) j--;   // never split a surrogate pair
+      const r = await exec("sh", ["-c", first ? 'printf %s "$2" > "$1"' : 'printf %s "$2" >> "$1"', "board-part", tmp, text.slice(i, j)], { on });
+      if (r.code !== 0) throw new Error(r.stderr?.trim() || `can't write on ${on}`);
+      i = j;
+    }
+    const r = await exec("sh", ["-c", `s=$(${STAT}); [ "$s" = "$3" ] || { rm -f "$2"; echo stale >&2; exit 3; }; mv -f "$2" "$1" && stat -f "%i:%m:%z" "$1"`,
+      "board-commit", path, tmp, stamp], { on });
+    if (r.code === 3) throw new Error("stale: the file changed since it was read");
+    if (r.code !== 0) throw new Error(r.stderr?.trim() || `can't write ${path} on ${on}`);
+    seen.set(key(on, path), { text, stamp: r.stdout.trim() });
+    return null;
+  } catch (e) {
+    exec("rm", ["-f", tmp], { on }).catch(() => {});
+    throw e;
+  }
 }

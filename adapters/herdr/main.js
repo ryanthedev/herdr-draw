@@ -6,7 +6,7 @@
 
 import { View, div, image, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
-import { props, exec, theme, settings, home, appHome, nextCommand, panes, focused, readTextFile, writeTextFile, fonts } from "herdr";
+import { props, exec, theme, settings, home, appHome, nextCommand, panes, focused, readTextFile, writeTextFile, fonts, machines, spaces } from "herdr";
 import { Editor, TOOLS, STROKES, FILLS, WIDTHS, STYLES } from "./core/editor.js";
 import { withAlpha } from "./core/render.js";
 import { PRESET_NAMES } from "./core/anim.js";
@@ -22,7 +22,7 @@ import { FileStore } from "./store.js";
 import { readText, writeText } from "./io.js";
 import { SHORTCUTS, takenKeys, fitKeys } from "./core/shortcuts.js";
 import { demoScene } from "./core/demo.js";
-import { rankBoards, newBoardPath, parseRecent, pushRecent, parseListing, boardName, folderOf, tilde } from "./core/boards.js";
+import { rankBoards, newBoardPath, parseRecent, pushRecent, parseListing, boardName, folderOf, tilde, boardRef, parseRef } from "./core/boards.js";
 import { emptyScene } from "./core/model.js";
 import { panelLayout, panelSections, dragWidth, titleOf, WIDTH } from "./core/panel.js";
 import { panelState, loadPanel, changePanel, savePanel, panelChanged } from "./panel-store.js";
@@ -110,6 +110,13 @@ function batchPaths(items) {
   return { layers, texts };
 }
 
+// A machine this Herdr reaches by that name (a space's `machine`), or null: this computer. A board
+// pane's `machine` prop names where its file lives; the same pane drawn by that machine's own Herdr
+// window doesn't list itself, so there the file is local.
+const remoteOn = m => (m && (machines?.() ?? []).some(x => x.name === m) ? m : null);
+// The machine of the space with the keyboard (null: this computer).
+const focusedMachine = () => { const f = focused?.(); return f ? ((spaces?.() ?? []).find(s => s.id === f.space)?.machine ?? null) : null; };
+
 // Write a small file in `dir` atomically (temp + mv), fire and forget.
 function cx_free_write(dir, name, text) {
   exec("sh", ["-c", 'mkdir -p "$1" && printf %s "$3" > "$1/.$2.$$" && mv -f "$1/.$2.$$" "$1/$2"', "write-small", dir, name, text]);
@@ -119,9 +126,13 @@ export default class Draw extends View {
   init(_props, cx) {
     const p = props() ?? {};
     this.propFile = p.file ? String(p.file).replace(/^~(?=\/)/, home()) : null;
+    this.propMachine = typeof p.machine === "string" && p.machine ? p.machine : null;   // where the file lives (null: here)
     // A pane remembers the board it was switched to (⌘O), as long as it was opened on the same props.
     let mem = null; try { mem = JSON.parse(localStorage.getItem("board") ?? "null"); } catch { mem = null; }
-    this.file = mem && mem.props === this.propFile && typeof mem.file === "string" ? mem.file : this.propFile;
+    const same = mem && mem.props === this.propFile && (mem.propMachine ?? null) === this.propMachine && typeof mem.file === "string";
+    this.file = same ? mem.file : this.propFile;
+    this.machine = remoteOn(same ? mem.machine ?? null : this.propMachine);
+    this.homes = {};   // other machines' home folders, as the picker learns them
     // Ops only mark the board dirty; after(cx) schedules the save with the live event's cx
     // (a cx kept past its call is rejected by GPUI).
     this.ed = this.newEditor();
@@ -194,22 +205,24 @@ export default class Draw extends View {
   newEditor() { const ed = new Editor({ onOp: op => { if (!op.transient) this.dirty = true; } }); ed.setSize(this.size?.w ?? 900, this.size?.h ?? 600); return ed; }
 
   startStore(cx) {
-    const store = this.store = new FileStore(this.file, this.ed, {
+    const store = this.store = new FileStore(this.file, this.ed, { on: this.machine,
       onError: m => { if (this.store === store) this.error = m; },
       onExternal: n => { if (this.store === store) { this.error = null; this.flash = `${n} change${n === 1 ? "" : "s"} from the file`; } },
     });
     cx.spawn(async acx => { await store.start(acx); if (this.store !== store) return; this.fitted = false; this.maybeFit(); acx.notify(); });
-    this.remember(this.file);
+    this.remember(boardRef(this.file, this.machine));
   }
 
   // This pane moves to another board: the current one is saved first, then a fresh editor and store.
-  async switchBoard(file, cx) {
-    if (file === this.file && this.store) return;
+  // `ref`: a path here, or "machine:/path" (boardRef) for a board on another machine.
+  async switchBoard(ref, cx) {
+    const { path: file, machine } = parseRef(ref), on = remoteOn(machine);
+    if (file === this.file && on === this.machine && this.store) return;
     if (this.board) this.endDemo();
     if (this.ed.text) this.ed.commitText();
     if (this.store) { if (this.dirty) { this.dirty = false; } await this.store.flush(cx); this.store.stop(); }
-    this.file = file; this.error = null; this.flash = null; this.ed = this.newEditor(); this.selKey = "";
-    try { localStorage.setItem("board", JSON.stringify({ props: this.propFile, file })); } catch {}
+    this.file = file; this.machine = on; this.error = null; this.flash = null; this.ed = this.newEditor(); this.selKey = "";
+    try { localStorage.setItem("board", JSON.stringify({ props: this.propFile, propMachine: this.propMachine, file, machine: on })); } catch {}
     this.startStore(cx);
     cx.notify();
   }
@@ -227,41 +240,55 @@ export default class Draw extends View {
     if (this.picker) return;
     if (this.ed.text) this.ed.commitText();
     this.help = false;
-    this.picker = { query: "", rows: [], sel: 0, top: 0 };
+    // Boards on the machine of the space you're in (a space on another machine lists that machine's).
+    this.picker = { query: "", rows: [], sel: 0, top: 0, on: remoteOn(focusedMachine()) };
     this.pickInput.set_value("");
     this.rankPicker();
     this.pickInput.focus();
     cx.timer.after(30, () => { if (this.picker) this.pickInput.focus(); });   // not drawn yet: again after the frame
     cx.spawn(async cx => {
       this.recent = parseRecent(await readText(RECENT()).catch(() => null));
-      this.boardList = await this.listBoards();
+      this.boardList = await this.listBoards(this.picker?.on ?? null);
       if (this.picker) { this.rankPicker(true); cx.notify(); }
     });
   }
   closePicker(cx) { this.picker = null; this.handle.focus(); cx?.notify?.(); }
 
   // *.excalidraw files where boards live: ~/boards, this board's folder, the space's folder, the scratch board's.
-  async listBoards() {
+  // `on`: list that machine's instead (its ~/boards, the space's folder, this board's if it's there).
+  async listBoards(on = null) {
     const f = focused?.() ?? null;
-    const dirs = [...new Set([BOARDS_DIR(), this.file && folderOf(this.file), f?.cwd, `${appHome()}/herdr-draw`].filter(Boolean))];
+    let dirs;
+    if (on) {
+      const h = await this.homeOf(on);
+      dirs = [...new Set([h && `${h}/boards`, this.machine === on && this.file && folderOf(this.file), f?.cwd].filter(Boolean))];
+    } else dirs = [...new Set([BOARDS_DIR(), !this.machine && this.file && folderOf(this.file), f?.cwd, `${appHome()}/herdr-draw`].filter(Boolean))];
     // find itself, no shell: each folder on its own (a missing one just lists nothing).
     let out = "";
     for (const d of dirs) {
       const r = await exec("find", [d, "-maxdepth", "4", "(", "-name", "node_modules", "-o", "-name", ".git", "-o", "-name", ".cache", "-o", "-name", "Library", "-o", "-name", ".Trash", ")", "-prune",
-        "-o", "-type", "f", "(", "-iname", "*.excalidraw", "-o", "-iname", "*.excalidraw.json", ")", "-exec", "stat", "-f", "%m %N", "{}", "+"]).catch(() => null);
+        "-o", "-type", "f", "(", "-iname", "*.excalidraw", "-o", "-iname", "*.excalidraw.json", ")", "-exec", "stat", "-f", "%m %N", "{}", "+"], on ? { on } : undefined).catch(() => null);
       out += (r?.stdout ?? "") + "\n";
       if (out.length > 400000) break;   // enough boards for a picker
     }
     const seen = new Set();
-    return parseListing(out).filter(b => !seen.has(b.path) && seen.add(b.path));
+    return parseListing(out).map(b => ({ ...b, path: boardRef(b.path, on) })).filter(b => !seen.has(b.path) && seen.add(b.path));
+  }
+  // Another machine's home folder (asked once).
+  async homeOf(on) {
+    if (this.homes[on]) return this.homes[on];
+    const r = await exec("sh", ["-c", 'printf %s "$HOME"'], { on }).catch(() => null);
+    const h = r?.code === 0 && r.stdout.startsWith("/") ? r.stdout.trim() : null;
+    if (h) this.homes[on] = h;
+    return h;
   }
 
   rankPicker(keep = false) {
     const p = this.picker; if (!p) return;
     const was = p.rows[p.sel]?.path;
-    p.rows = rankBoards(p.query, this.boardList ?? [], this.recent, { home: home(), current: this.file });
+    p.rows = rankBoards(p.query, this.boardList ?? [], this.recent, { home: home(), homes: this.homes, current: this.file && boardRef(this.file, this.machine) });
     const q = p.query.trim();
-    if (q && !p.rows.some(r => r.name.toLowerCase() === q.toLowerCase())) p.rows.push({ create: true, name: q, folder: tilde(BOARDS_DIR(), home()) });
+    if (q && !p.rows.some(r => r.name.toLowerCase() === q.toLowerCase())) p.rows.push({ create: true, name: q, folder: p.on ? `${p.on}: ~/boards` : tilde(BOARDS_DIR(), home()) });
     const at = keep && was ? p.rows.findIndex(r => r.path === was) : -1;
     this.pickSelect(at >= 0 ? at : 0);
   }
@@ -281,15 +308,17 @@ export default class Draw extends View {
   // A new board named as typed, in ~/boards (never over an existing file).
   pickCreate(cx) {
     const q = this.picker?.query.trim(); if (!q) return;
-    const taken = new Set((this.boardList ?? []).map(b => b.path));
-    const path = newBoardPath(BOARDS_DIR(), q, taken);
+    const on = this.picker.on ?? null, dir = on ? (this.homes[on] && `${this.homes[on]}/boards`) : BOARDS_DIR();
+    if (!dir) { this.error = `Can't reach ${on} to make a board there`; return cx.notify(); }
+    const taken = new Set((this.boardList ?? []).map(b => parseRef(b.path)).filter(r => r.machine === on).map(r => r.path));
+    const path = newBoardPath(dir, q, taken), shown = on ? `${on}: ${tilde(path, this.homes[on])}` : tilde(path, home());
     this.closePicker(cx);
     cx.spawn(async cx => {
-      await exec("mkdir", ["-p", folderOf(path)]);
-      try { await writeText(path, JSON.stringify(emptyScene(), null, 2), null); }
-      catch (e) { this.error = `Can't make ${tilde(path, home())}: ${e?.message ?? e}`; cx.notify(); return; }
-      await this.switchBoard(path, cx);
-      this.flash = `new board: ${tilde(path, home())}`;
+      await exec("mkdir", ["-p", folderOf(path)], on ? { on } : undefined);
+      try { await writeText(path, JSON.stringify(emptyScene(), null, 2), null, { on }); }
+      catch (e) { this.error = `Can't make ${shown}: ${e?.message ?? e}`; cx.notify(); return; }
+      await this.switchBoard(boardRef(path, on), cx);
+      this.flash = `new board: ${shown}`;
       this.after(cx);
     });
   }
@@ -544,6 +573,7 @@ export default class Draw extends View {
   // next to the board, cropped to the drawing, on the board's own page color. The PNG is the
   // same SVG rasterized by macOS's sips, which renders embedded pictures and any script.
   async exportBoard() {
+    if (this.machine) { this.flash = `this board lives on ${this.machine}: export it there with drawh export`; return; }
     const doc = (this.board ?? this.ed).doc, theme = boardTheme(doc.appState), base = this.file.replace(/\.excalidraw(\.json)?$/, "");
     const name = p => p.split("/").pop();
     try {
@@ -628,7 +658,7 @@ export default class Draw extends View {
       .child(this.button(t, "help", div().text_size(13).font_semibold().child("?"), this.help, "Every shortcut, and a demo (?)", () => { this.help = !this.help; }))
       .child(div().id("board-name").ml(4).px(6).h(24).rounded(5).flex().items_center().gap(4).cursor_pointer().hover(s => s.bg(t.hover)).tooltip("Switch board or make a new one (⌘O)")
         .on_click((_e, cx) => { this.openPicker(cx); cx.notify(); })
-        .child(div().text_size(12).text_color(t.muted).truncate().child(this.file ? boardName(name) : "no board")).child(div().text_size(9).text_color(t.dim).child("▾")));
+        .child(div().text_size(12).text_color(t.muted).truncate().child(this.file ? (this.machine ? `${this.machine} · ` : "") + boardName(name) : "no board")).child(div().text_size(9).text_color(t.dim).child("▾")));
   }
 
   canvas(t) {

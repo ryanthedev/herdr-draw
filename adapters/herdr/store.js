@@ -3,14 +3,16 @@
 // network transport can sit beside it (or replace it) without touching the editor.
 
 import { watchFolder } from "herdr";
-import { readText as readTextFile, writeText as writeTextFile } from "./io.js";   // any size (Herdr's own stop at 1 MiB)
+import { readText, writeText, remoteChanged } from "./io.js";   // any size (Herdr's own stop at 1 MiB), here or on another machine
 import { emptyScene } from "./core/model.js";
 
 const SAVE_DELAY = 250;
+const POLL_MS = 1500;   // a board on another machine: how often to look for other writers (no watching there)
 
 export class FileStore {
-  constructor(file, editor, { onError = () => {}, onExternal = () => {} } = {}) {
-    this.file = file; this.ed = editor; this.onError = onError; this.onExternal = onExternal;
+  // `on`: the machine the file lives on (a space's `machine`), null for this one.
+  constructor(file, editor, { on = null, onError = () => {}, onExternal = () => {} } = {}) {
+    this.on = on; this.file = file; this.ed = editor; this.onError = onError; this.onExternal = onExternal;
     this.disk = null;          // the file's text as last read or written
     this.timer = null; this.saving = false; this.again = false; this.pending = null;
   }
@@ -18,7 +20,7 @@ export class FileStore {
   // `cx` must outlive this call: pass the async cx from cx.spawn.
   async start(cx) {
     try {
-      const text = await readTextFile(this.file);
+      const text = await this.read();
       if (text !== null) { this.ed.load(JSON.parse(text)); this.disk = text; }
       else this.ed.load(emptyScene());
     } catch (e) { this.onError(`Can't read ${this.file}: ${e?.message ?? e}`); }
@@ -43,14 +45,14 @@ export class FileStore {
     try {
       let text = JSON.stringify(this.ed.scene(), null, 2);
       if (text !== this.disk) {
-        try { await writeTextFile(this.file, text, this.disk); this.disk = text; }
+        try { await this.write(text, this.disk); this.disk = text; }
         catch {
           // Someone else (an agent) wrote since we last looked: take their edits
           // (newer element versions win), then write the merge.
-          const theirs = await readTextFile(this.file);
+          const theirs = await this.read();
           if (theirs !== null) this.merge(theirs);
           text = JSON.stringify(this.ed.scene(), null, 2);
-          await writeTextFile(this.file, text, theirs);
+          await this.write(text, theirs);
           this.disk = text;
         }
       }
@@ -60,6 +62,9 @@ export class FileStore {
     cx?.notify?.();
   }
 
+  read() { return readText(this.file, { on: this.on }); }
+  write(text, expected) { return writeText(this.file, text, expected, { on: this.on }); }
+
   merge(text) {
     const s = JSON.parse(text);
     const changed = this.ed.receive({ elements: s.elements ?? [], appState: s.appState?.herdr, files: s.files });
@@ -67,6 +72,7 @@ export class FileStore {
   }
 
   watch(cx) {
+    if (this.on) return this.poll(cx);
     const dir = this.file.slice(0, this.file.lastIndexOf("/") + 1), base = this.file.slice(dir.length);
     cx.spawn(async cx => {
       for (;;) {
@@ -75,11 +81,29 @@ export class FileStore {
         if (!changed.some(p => p.endsWith("/" + base) || p === this.file || p.endsWith(dir) || p.endsWith(dir.slice(0, -1)))) continue;
         // One bad read must not end live updates for good: report it and keep watching.
         let text;
-        try { text = await readTextFile(this.file); } catch (e) { this.onError(`Can't read ${this.file}: ${e?.message ?? e}`); cx.notify(); continue; }
+        try { text = await this.read(); } catch (e) { this.onError(`Can't read ${this.file}: ${e?.message ?? e}`); cx.notify(); continue; }
         if (text === null || text === this.disk) continue;        // our own write
         if (this.ed.g) { this.pending = text; continue; }        // mid-gesture: after release
         this.absorb(text, cx);
       }
+    });
+  }
+
+  // Another machine's file can't be watched: look at its stamp every POLL_MS (one small command).
+  poll(cx) {
+    let busy = false;
+    const t = cx.timer.every(POLL_MS, async cx => {
+      if (this.stopped) { t.cancel(); return; }
+      if (busy || this.saving) return;
+      busy = true;
+      try {
+        if (!(await remoteChanged(this.file, this.on))) return;
+        const text = await this.read();
+        if (this.stopped || text === null || text === this.disk) return;
+        if (this.ed.g) { this.pending = text; return; }
+        this.absorb(text, cx);
+      } catch (e) { this.onError(`Can't reach ${this.on}: ${e?.message ?? e}`); cx.notify(); }
+      finally { busy = false; }
     });
   }
 

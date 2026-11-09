@@ -78,7 +78,10 @@ export function installFakes({ file, home }) {
     Input: { new: state => { focus.rendered.add(state); return makeEl("input", { state }); } },
   }));
   mock.module("herdr", () => ({
-    props: () => ({ file }),
+    props: () => calls.props ?? { file },
+    // Another machine, for boards that live there: its commands run here, recorded with `on`.
+    machines: () => calls.machines ?? [{ name: null, layout: "ready" }],
+    spaces: () => calls.spaces ?? [],
     fonts: () => ["Chalkboard SE", "Menlo"],
     theme: () => THEME,
     settings: () => ({ zoom: 1 }),
@@ -103,8 +106,9 @@ export function installFakes({ file, home }) {
       mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, text); return null;
     },
     // Recorded, not run, unless a test opts a command in with calls.real(cmd, args) (never pbcopy &c.).
-    exec: async (cmd, args) => {
+    exec: async (cmd, args, opts) => {
       calls.exec.push([cmd, ...args]);
+      if (opts?.on) (calls.remote ??= []).push([opts.on, cmd, ...args]);
       if (calls.real?.(cmd, args)) {
         const r = Bun.spawnSync([cmd, ...args], { env: process.env });
         // Herdr's exec caps output at 8 MiB (herdr.d.ts): a read that leans on more must fail here too.

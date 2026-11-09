@@ -640,3 +640,57 @@ test("panel: tabs show one section at a time; ⚙ hides, reorders and resets sec
   expect(sectionIds(ui)).toContain("sec-animate");
   await freshPanel();
 });
+
+// ── a board on another machine (a space's `machine`): read, written and polled through exec's `on` ──
+test("a board on another machine opens, saves, picks up an agent's writes, and shows in the picker", async () => {
+  const dir = mkdtempSync(`${tmpdir()}/herdr-draw-ska-`), rf = `${dir}/journeys.excalidraw`;
+  const drawh = (...a) => { const r = Bun.spawnSync([`${ROOT}cli/drawh`, ...a]); if (r.exitCode) throw new Error(r.stderr.toString()); return r.stdout.toString().trim(); };
+  drawh("add", rf, "rect", "--at", "0,0", "--label", "Search");
+  const was = { props: calls.props, machines: calls.machines, spaces: calls.spaces, real: calls.real, cwd: calls.cwd };
+  calls.props = { file: rf, machine: "ska" };
+  calls.machines = [{ name: null, layout: "ready" }, { name: "ska", layout: "ready" }];
+  calls.real = cmd => ["sh", "find", "mkdir", "rm"].includes(cmd);
+  calls.remote = [];
+  try {
+    const ui = await open();
+    await ui.cx.flush();
+    expect(ui.view.machine).toBe("ska");
+    expect(ui.view.ed.doc.live().some(e => e.text === "Search")).toBe(true);
+    expect(calls.remote.some(c => c[0] === "ska" && c[4] === "board-read")).toBe(true);
+    expect(textOf(byId(ui.tree(), "board-name") ?? ui.tree())).toContain("ska · journeys");
+    // An edit here is saved there: parts into a temp file, renamed over the board if it's unchanged.
+    ui.click("tool-rectangle"); ui.drag([300, 300], [420, 380]);
+    await ui.cx.flush();
+    const disk = () => JSON.parse(readFileSync(rf, "utf8")).elements.filter(e => !e.isDeleted);
+    expect(disk().filter(e => e.type === "rectangle").length).toBe(2);
+    expect(calls.remote.some(c => c[4] === "board-commit")).toBe(true);
+    expect(readdirSync(dir).filter(f => f.includes(".herdr-"))).toEqual([]);              // no temp files left
+    // The agent there writes: the pane's poll sees the new stamp and takes it in.
+    drawh("add", rf, "rect", "--at", "0,300", "--label", "Pay");
+    await ui.cx.flush();
+    expect(ui.view.ed.doc.live().some(e => e.text === "Pay")).toBe(true);
+    // Both write at once: the pane's save finds the board changed, merges, and keeps both.
+    drawh("add", rf, "rect", "--at", "0,600", "--label", "Confirm");
+    ui.click("tool-ellipse"); ui.drag([500, 300], [560, 360]);
+    await ui.cx.flush(); await ui.cx.flush();
+    expect(disk().some(e => e.text === "Confirm")).toBe(true);
+    expect(disk().some(e => e.type === "ellipse")).toBe(true);
+    // In a space on that machine, ⌘O lists that machine's boards, marked with its name.
+    calls.spaces = [{ id: "s1", machine: "ska" }]; calls.cwd = dir;
+    ui.key("o", { platform: true });
+    await ui.cx.flush();
+    const row = ui.view.picker.rows.find(r => r.path === `ska:${rf}`);
+    expect(row).toBeTruthy();
+    expect(row.folder.startsWith("ska: ")).toBe(true);
+    ui.key("escape");
+  } finally { Object.assign(calls, was); calls.remote = []; }
+});
+
+test("the same pane drawn by that machine's own Herdr (which doesn't list itself) reads the file locally", async () => {
+  const was = calls.props;
+  calls.props = { file, machine: "ska" };            // machines(): only this computer
+  try {
+    const ui = await open();
+    expect(ui.view.machine).toBe(null);
+  } finally { calls.props = was; }
+});

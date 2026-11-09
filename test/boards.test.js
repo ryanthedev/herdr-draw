@@ -1,6 +1,6 @@
 // The board picker's logic (core/boards.js).
 import { test, expect } from "bun:test";
-import { rankBoards, newBoardPath, parseRecent, pushRecent, parseListing, boardName } from "../core/boards.js";
+import { rankBoards, newBoardPath, parseRecent, pushRecent, parseListing, boardName, boardRef, parseRef } from "../core/boards.js";
 
 const H = "/Users/me";
 const files = [
@@ -46,4 +46,15 @@ test("recent list and listing parse safely", () => {
   expect(pushRecent(Array.from({ length: 40 }, (_, i) => `/${i}.excalidraw`), "/new.excalidraw").length).toBe(30);
   expect(parseListing("1700000000 /x/a b.excalidraw\ngarbage\n12 /y/c.png\n")).toEqual([{ path: "/x/a b.excalidraw", mtime: 1700000000 }]);
   expect(boardName("/x/My Board.excalidraw")).toBe("My Board");
+});
+
+test("boards on another machine: refs round-trip, rank with the rest, show their machine", () => {
+  const ref = boardRef("/Users/w/repos/booking/docs/j.excalidraw", "ska");
+  expect(ref).toBe("ska:/Users/w/repos/booking/docs/j.excalidraw");
+  expect(parseRef(ref)).toEqual({ machine: "ska", path: "/Users/w/repos/booking/docs/j.excalidraw" });
+  expect(parseRef("/Users/me/b.excalidraw")).toEqual({ machine: null, path: "/Users/me/b.excalidraw" });
+  expect(boardRef("/x.excalidraw")).toBe("/x.excalidraw");
+  expect(parseRecent(JSON.stringify([ref, "nope"]))).toEqual([ref]);
+  const rows = rankBoards("booking", files, [ref], { home: H, homes: { ska: "/Users/w" } });
+  expect(rows[0]).toMatchObject({ path: ref, name: "j", folder: "ska: ~/repos/booking/docs", recent: true });
 });

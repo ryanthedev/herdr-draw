@@ -40,7 +40,7 @@ Herdr-draw data lives where Excalidraw keeps foreign data: `customData.{layer,z,
 
 ## Dev loop
 
-- `bun test` (225 tests). `drawh mermaid` runs core/mermaid.js through node (or bun), so agents and the pane lay out alike. Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
+- `bun test` (229 tests). `drawh mermaid` runs core/mermaid.js through node (or bun), so agents and the pane lay out alike. Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
 - `scripts/dev-sync.sh` builds `build/herdr-draw` (adapter + core + svg + drawh) and installs a **copy** into `~/.config/herdr-app/mods/herdr-draw`.
 - `scripts/install.sh` installs **HEAD** into the person's Herdr (ignores `HERDR_APP_HOME`): run it after commits the person
   should test. If `.git/hooks/post-commit` exists (`scripts/install-hook.sh`), every commit to `main` installs itself. ⌘⇧B opens a scratch board. Their notes: `FEEDBACK.md`.
@@ -128,4 +128,10 @@ sent only to that window's id; quit it by its pid when done.
 - Library file: `<appHome>/herdr-draw/library.excalidrawlib` (pane and `drawh lib`; `HERDR_APP_HOME` picks the test home's).
   Items carry their pictures' `files` (a herdr extension: excalidraw.com shows library pictures as placeholders). Sidebar
   previews draw paths only, no text or pictures.
+- Boards on another machine (a Herdr space's `machine`, e.g. the work Mac `ska`): the pane's `machine` prop (or a picker
+  row `ska:/path`, `boardRef`/`parseRef` in core/boards.js) sends every read and write through `exec(..., {on})`
+  (`adapters/herdr/io.js`): a read is one `cat` plus a stamp (`stat -f %i:%m:%z`, BSD), a write goes as 128K-char argv
+  parts into `<board>.herdr-*` and is renamed over the board only if the stamp is unchanged; no remote watching, so
+  the store polls the stamp every 1.5 s. Up to exec's 8 MiB. ⌘O in a space on that machine lists its boards. That
+  machine's own Herdr doesn't list itself in `machines()`, so the same pane there reads locally. Export is local-only.
 - Writers other than the pane must bump `version` on every element they change (drawh does), or the pane may keep its copy.
