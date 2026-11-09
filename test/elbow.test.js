@@ -2,13 +2,14 @@ import { test, expect, afterAll } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { elbowRoute, facingSide, simplify } from "../core/elbow.js";
-import { resolvedPoints, bbox, alongPath } from "../core/geometry.js";
+import { resolvedPoints, bbox, alongPath, fixedPointOf } from "../core/geometry.js";
 import { Editor } from "../core/editor.js";
 import { setup, THEME } from "./harness/fixture.js";
 import { closeRaster } from "./harness/raster.js";
 
 afterAll(closeRaster);
 const ROOT = new URL("..", import.meta.url).pathname;
+const drawh = (...a) => { const r = Bun.spawnSync([`${ROOT}cli/drawh`, ...a]); if (r.exitCode) throw new Error(r.stderr.toString()); return r.stdout.toString().trim(); };
 
 // Every segment is horizontal or vertical.
 const orthogonal = pts => pts.every((p, i) => i === 0 || Math.abs(p.x - pts[i - 1].x) < 1e-6 || Math.abs(p.y - pts[i - 1].y) < 1e-6);
@@ -164,4 +165,82 @@ test("snapshot: elbow arrows", async () => {
     const pts = resolvedPoints(t.ed.doc, a).map(([x, y]) => ({ x, y }));
     for (const r of t.live().filter(e => e.type === "rectangle" && e.id !== a.startBinding?.elementId && e.id !== a.endBinding?.elementId)) expect(avoids(pts, bbox(r))).toBe(true);
   }
+});
+
+// Excalidraw re-routes an elbow from `binding.fixedPoint` (a fraction of the bound shape's
+// unrotated box) when either end moves; without it, excalidraw.com pins the end to the
+// shape's center (verified 2026-11-08 by dropping a board into excalidraw.com in headless Chromium).
+const onShape = (shape, fp) => [shape.x + fp[0] * shape.width, shape.y + fp[1] * shape.height];
+const near = (p, q, tol = 0.02 * 100) => Math.abs(p[0] - q[0]) <= tol && Math.abs(p[1] - q[1]) <= tol;
+
+test("elbows write Excalidraw's fixedPoint for both ends, and keep it current", () => {
+  const t = setup();
+  t.key("r"); t.drag([100, 100], [200, 160]);
+  t.key("r"); t.drag([400, 300], [500, 360]);
+  t.ed.setStyle({ elbowed: true });
+  t.key("a"); t.drag([150, 130], [450, 330]);
+  const [a0] = t.byType("arrow");
+  const check = () => {
+    const a = t.ed.doc.get(a0.id), pts = resolvedPoints(t.ed.doc, a);
+    for (const [k, p] of [["startBinding", pts[0]], ["endBinding", pts.at(-1)]]) {
+      const fp = a[k].fixedPoint;
+      expect(fp).toHaveLength(2);
+      expect(near(onShape(t.ed.doc.get(a[k].elementId), fp), p)).toBe(true);
+    }
+    return a;
+  };
+  const first = check();
+  t.key("escape"); t.drag([450, 340], [150, -60]);         // move the target above the start: other sides, new fixedPoints
+  expect(check().endBinding.fixedPoint).not.toEqual(first.endBinding.fixedPoint);
+  t.ed.select([a0.id]); t.ed.setStyle({ elbowed: false });  // a sharp arrow has no fixed point
+  const a = t.ed.doc.get(a0.id);
+  expect(a.startBinding.fixedPoint).toBeUndefined();
+  expect(a.endBinding.fixedPoint).toBeUndefined();
+});
+
+test("fixedPointOf: Excalidraw's fraction of the unrotated box, 0.5 nudged like excalidraw.com", () => {
+  const r = { x: 0, y: 0, width: 100, height: 60, angle: 0 };
+  expect(fixedPointOf(r, [50, 66])).toEqual([0.5001, 1.1]);
+  // Turned a quarter clockwise, the box's right side faces down: a point below the center is on it.
+  const q = { ...r, angle: Math.PI / 2 };
+  const fp = fixedPointOf(q, [50, 30 + 56]);
+  expect(fp[0]).toBeCloseTo(1.06, 6); expect(fp[1]).toBeCloseTo(0.5001, 6);
+});
+
+test("an older board's elbows get fixedPoints when saved, without new versions", () => {
+  const t = setup();
+  t.key("r"); t.drag([100, 100], [200, 160]);
+  t.key("r"); t.drag([400, 300], [500, 360]);
+  t.ed.setStyle({ elbowed: true });
+  t.key("a"); t.drag([150, 130], [450, 330]);
+  const scene = JSON.parse(JSON.stringify(t.ed.scene()));
+  for (const e of scene.elements) if (e.type === "arrow") { delete e.startBinding.fixedPoint; delete e.endBinding.fixedPoint; }
+  const ed = new Editor({ scene });
+  const before = ed.doc.live().find(e => e.type === "arrow").version;
+  const out = ed.scene().elements.find(e => e.type === "arrow");
+  expect(out.startBinding.fixedPoint).toHaveLength(2);
+  expect(out.endBinding.fixedPoint).toHaveLength(2);
+  expect(out.version).toBe(before);
+  expect(ed.doc.live().find(e => e.type === "arrow").startBinding.fixedPoint).toBeUndefined();   // the doc itself is untouched
+});
+
+test("drawh bakes elbow routes and fixedPoints into the file, and re-routes after a move", () => {
+  const f = `${mkdtempSync(`${tmpdir()}/drawh-`)}/b.excalidraw`;
+  drawh("add", f, "rect", "--at", "0,0", "--id", "A");
+  drawh("add", f, "rect", "--at", "400,300", "--id", "B");
+  drawh("arrow", f, "A", "B", "--elbow");
+  const read = () => { const s = JSON.parse(readFileSync(f, "utf8")); return { s, a: s.elements.find(e => e.type === "arrow") }; };
+  const shape = (s, id) => s.elements.find(e => e.id === id);
+  const ends = a => [[a.x, a.y], [a.x + a.points.at(-1)[0], a.y + a.points.at(-1)[1]]];
+  let { s, a } = read();
+  expect(orthogonal(a.points.map(([x, y]) => ({ x, y })))).toBe(true);
+  expect(a.points.length).toBeGreaterThan(2);
+  expect(near(onShape(shape(s, a.startBinding.elementId), a.startBinding.fixedPoint), ends(a)[0])).toBe(true);
+  expect(near(onShape(shape(s, a.endBinding.elementId), a.endBinding.fixedPoint), ends(a)[1])).toBe(true);
+  const v = a.version;
+  drawh("move", f, a.endBinding.elementId, "--by", "0,300");
+  ({ s, a } = read());
+  expect(a.version).toBeGreaterThan(v);
+  expect(near(onShape(shape(s, a.endBinding.elementId), a.endBinding.fixedPoint), ends(a)[1])).toBe(true);
+  expect(ends(a)[1][1]).toBeGreaterThan(590);   // followed B down
 });

@@ -202,15 +202,51 @@ export function resolvedPoints(doc, el) {
   return pts;
 }
 
+// Excalidraw's `fixedPoint` for an elbow end at world point p: where it sits on the bound
+// shape, as a fraction of the shape's unrotated box (past 0..1 when the end keeps a gap off
+// the outline). excalidraw.com re-routes elbows from it; an elbow binding without one gets
+// pinned to the shape's center there. Exactly 0.5 is nudged to 0.5001, as excalidraw.com does.
+export function fixedPointOf(shape, p) {
+  const b = bbox({ ...shape, angle: 0 }), q = toLocal(shape, { x: p[0], y: p[1] });
+  const f = v => (Math.abs(v - 0.5) < 0.0001 ? 0.5001 : v);
+  return [f((q.x - b.x) / (b.w || 1)), f((q.y - b.y) / (b.h || 1))];
+}
+
+// An elbow's bindings with fixedPoints for its resolved ends `pts`; other arrows' without.
+function withFixedPoints(doc, el, pts) {
+  const out = {};
+  for (const [k, p] of [["startBinding", pts[0]], ["endBinding", pts[pts.length - 1]]]) {
+    const b = el[k], shape = b && doc.get(b.elementId);
+    if (!b) continue;
+    if (el.elbowed && shape) out[k] = { ...b, fixedPoint: fixedPointOf(shape, p) };
+    else if (b.fixedPoint) { const { fixedPoint, ...rest } = b; out[k] = rest; }
+  }
+  return out;
+}
+const sameBinding = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
 // Bake resolved arrow geometry into the element, so other tools see it right.
 export function settle(doc, el) {
   if ((el.type !== "arrow" && el.type !== "line") || (!el.startBinding && !el.endBinding && !el.elbowed)) return false;
   const pts = resolvedPoints(doc, el);
   const next = pts.map(p => [p[0] - pts[0][0], p[1] - pts[0][1]]);
-  if (el.x === pts[0][0] && el.y === pts[0][1] && JSON.stringify(next) === JSON.stringify(el.points)) return false;
+  const bindings = withFixedPoints(doc, el, pts);
+  if (el.x === pts[0][0] && el.y === pts[0][1] && JSON.stringify(next) === JSON.stringify(el.points) &&
+      Object.entries(bindings).every(([k, b]) => sameBinding(el[k], b))) return false;
   el.x = pts[0][0]; el.y = pts[0][1]; el.points = next;
+  Object.assign(el, bindings);
   const b = bbox(el); el.width = b.w; el.height = b.h;
   return true;
+}
+
+// A scene for other tools: elbows that were never settled since fixedPoints existed (older
+// boards) get theirs, derived from the geometry, so no new versions.
+export function sceneWithFixedPoints(doc, scene) {
+  const elements = scene.elements.map(e => {
+    if (!e.elbowed || e.isDeleted || !(e.startBinding && !e.startBinding.fixedPoint || e.endBinding && !e.endBinding.fixedPoint)) return e;
+    return { ...e, ...withFixedPoints(doc, e, resolvedPoints(doc, e)) };
+  });
+  return { ...scene, elements };
 }
 
 // Map an element from box `from` into box `to` (resizing a selection).

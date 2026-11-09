@@ -284,7 +284,24 @@ def load(path):
         die(f"{path} isn't valid JSON: {e}")
 
 
+def settle_elbows(scene):
+    """Route elbow arrows with the board's own code (core/geometry.js settle) and bake the route and
+    Excalidraw's fixedPoints into the file, so it opens right without the pane (and in excalidraw.com)."""
+    if not any(e.get("elbowed") and not e.get("isDeleted") and (e.get("startBinding") or e.get("endBinding")) for e in scene["elements"]):
+        return
+    url = lambda m: json.dumps("file://" + os.path.join(core_dir(), m))
+    script = ("import { Doc } from %s; import { settle } from %s; import { touch } from %s;"
+              "let s = ''; process.stdin.on('data', d => s += d); process.stdin.on('end', () => {"
+              " const doc = new Doc(JSON.parse(s)), out = [];"
+              " for (const el of doc.live()) if (el.elbowed) { const c = structuredClone(el);"
+              "  if (settle(doc, c)) { touch(c); doc.apply({ elements: [c] }, { force: true }); out.push(c); } }"
+              " process.stdout.write(JSON.stringify(out)); });") % (url("doc.js"), url("geometry.js"), url("model.js"))
+    done = {e["id"]: e for e in json.loads(run_js(script, json.dumps(scene)))}
+    scene["elements"] = [done.get(e["id"], e) for e in scene["elements"]]
+
+
 def save(path, scene):
+    settle_elbows(scene)
     tmp = path + ".drawh.tmp"
     with open(tmp, "w") as f:
         json.dump(scene, f, indent=2)

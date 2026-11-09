@@ -10,7 +10,7 @@ import {
 } from "./model.js";
 import { Doc } from "./doc.js";
 import {
-  bbox, unionBox, inBox, boxInBox, center, normalize, hits, hitTest, shapeAt, bindTargetAt, resolvedPoints, settle, mapIntoBox, distToSeg, segmentsIntersect,
+  bbox, unionBox, inBox, boxInBox, center, normalize, hits, hitTest, shapeAt, bindTargetAt, resolvedPoints, settle, sceneWithFixedPoints, mapIntoBox, distToSeg, segmentsIntersect,
   bounds, corners, rotate, rotateAbout, angleOf, centerOf, toLocal, toWorld as elToWorld, normAngle,
 } from "./geometry.js";
 import { paintScene, paintElement, project, rectCmds, withAlpha } from "./render.js";
@@ -70,7 +70,7 @@ export class Editor {
 
   load(scene) { this.doc.load(scene); this.pruneSel(); this.fixLayer(); this.changed(); }
   receive(op) { const ch = this.doc.apply(op); if (ch.length) { this.pruneSel(); this.fixLayer(); this.changed(); } return ch; }
-  scene() { return this.doc.toScene(); }
+  scene() { return sceneWithFixedPoints(this.doc, this.doc.toScene()); }
   changed() { this.version++; }
   setSize(w, h) { this.size = { w, h }; }
 
