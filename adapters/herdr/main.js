@@ -875,7 +875,10 @@ export default class Draw extends View {
     const c = this.sectionContent(t, r.id);
     if (!c) return null;
     const body = div().w_full().px(10).pb(8).pt(mode === "tabs" ? 8 : 0).child(c.body);
-    if (mode === "tabs") return v_flex().id(`sec-${r.id}`).w_full().child(body);
+    // As a tab, the tab names the section; a title that says more ("Properties · 3 selected") shows above the body.
+    if (mode === "tabs") return v_flex().id(`sec-${r.id}`).w_full()
+      .when(c.title !== r.title, el => el.child(div().px(10).pt(8).text_size(10).text_color(t.dim).font_semibold().child(c.title.toUpperCase())))
+      .child(body);
     const dragging = this.secDrag?.moved && this.secDrag.id === r.id;
     const head = h_flex().id(`sec-head-${r.id}`).w_full().h(26).px(8).gap(5).items_center().cursor_pointer()
       .bg(dragging ? withAlpha(t.accent, 0.16) : CLEAR).hover(s => s.bg(t.hover))

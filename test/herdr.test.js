@@ -621,6 +621,7 @@ test("panel: tabs show one section at a time; ⚙ hides, reorders and resets sec
   const ui = await open();
   ui.click("side-mode");
   expect(sectionIds(ui)).toEqual(["sec-properties"]);
+  expect(textOf(byId(ui.tree(), "sec-properties"))).toContain("PROPERTIES · NEXT SHAPE");   // the live title stays
   ui.click("tab-layers");
   expect(sectionIds(ui)).toEqual(["sec-layers"]);
   expect(byId(ui.tree(), "tab-arrange")).toBe(null);                         // nothing selected: no Arrange tab
