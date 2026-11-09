@@ -189,12 +189,16 @@ export function portAt(doc, p, tol, except) {
   }
   return best;
 }
-// Where a binding's fixedPoint puts the arrow end, if that's on or outside the outline (a
-// connection point). Inside (excalidraw.com stores aim points inside shapes) it doesn't pin.
+// Where a binding's fixedPoint puts the arrow end, if it's on or outside the outline (a
+// connection point): on the outline toward it, `gap` out. Projected, never taken as is:
+// excalidraw.com moves fixedPoints onto the shape's box (our [0.5, -0.06] comes back as
+// [0.5, 0]), and on an ellipse or diamond a box point can lie well off the shape.
+// Inside the shape (excalidraw.com's aim points) it doesn't pin: the end aims at the other end.
 function fixedEnd(shape, b) {
-  if (!b?.fixedPoint) return null;
+  if (!b?.fixedPoint || !bindable(shape)) return null;
   const box = bbox({ ...shape, angle: 0 }), w = toWorld(shape, { x: box.x + b.fixedPoint[0] * box.w, y: box.y + b.fixedPoint[1] * box.h });
-  return bindable(shape) && (shape.type === "image" ? !inBox(toLocal(shape, w), box, -0.5) : outlineDistance(shape, w) >= -0.5) ? [w.x, w.y] : null;
+  const inside = shape.type === "image" ? inBox(toLocal(shape, w), box, -0.5) : outlineDistance(shape, w) < -0.5;
+  return inside ? null : edgePoint(shape, w.x, w.y, b.gap ?? 6);
 }
 
 // Where a ray from a shape's center toward (tx, ty) leaves its outline, plus gap.

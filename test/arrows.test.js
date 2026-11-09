@@ -217,3 +217,31 @@ test("elbow arrows have no bend handles (their route is computed)", () => {
   t.key("v"); t.ed.select([t.byType("arrow")[0].id]);
   expect(t.ed.handles().some(h => h.kind === "mid")).toBe(false);
 });
+
+test("a fixedPoint on an ellipse's box (as excalidraw.com writes them) lands on the ellipse, gap off", async () => {
+  const { outlineDistance } = await import("../core/geometry.js");
+  const t = setup();
+  const e = boxAt(t, "o", [300, 100], [500, 220]);
+  t.key("a"); t.drag([100, 400], [400, 160]);
+  const a = structuredClone(t.byType("arrow")[0]);
+  for (const fp of [[0.2, 0], [0.5001, 0], [1, 0.9]]) {
+    a.endBinding = { elementId: e.id, focus: 0, gap: 6, fixedPoint: fp };
+    const end = resolvedPoints(t.ed.doc, a).at(-1), d = outlineDistance(e, { x: end[0], y: end[1] });
+    expect(d).toBeGreaterThan(3); expect(d).toBeLessThan(8);   // the gap (outlineDistance is approximate on an ellipse)
+  }
+  // Taken as is, [0.2, 0] would leave the end floating off the ellipse:
+  expect(outlineDistance(e, { x: e.x + 0.2 * e.width, y: e.y })).toBeGreaterThan(8);
+  {
+  }
+});
+
+test("a bend handle on a curve sits on the curve", () => {
+  const t = setup();
+  t.ed.setStyle({ roundness: { type: 2 } });
+  t.key("a"); t.click([100, 300]); t.click([300, 150]); t.click([500, 300]);
+  t.ed.pointerDown({ x: 500, y: 300 }, { clickCount: 2 }); t.ed.pointerUp({ x: 500, y: 300 });
+  const a = t.byType("arrow")[0];
+  t.key("v"); t.ed.select([a.id]);
+  const drawn = drawnPoints(t.ed.doc, t.ed.doc.get(a.id));
+  for (const h of t.ed.handles().filter(h => h.kind === "mid")) expect(drawn.some(p => Math.hypot(p[0] - h.x, p[1] - h.y) < 0.5)).toBe(true);
+});
