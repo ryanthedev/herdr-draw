@@ -533,3 +533,28 @@ test("⌘O picks another board: filter, switch (saving the one left first), and 
   expect(ui.view.ed.doc.live().length).toBe(0);
   calls.real = null;
 });
+
+test("with the person's keys.json, labels and help show ⌃ for the ⌘ keys Herdr takes, and ⌃ works", async () => {
+  // Like the person's: their Herdr gives these ⌘ keys to agents, splits and lazygit.
+  writeFileSync(`${home}/keys.json`, JSON.stringify({ global: { "cmd-a": "agent.next", "cmd-d": "pane.split:right", "cmd-[": "agent.prev", "cmd-]": "agent.next", "cmd-shift-l": "x" } }));
+  const ui = await open();
+  await ui.cx.flush(); await ui.cx.flush();
+  ui.click("tool-rectangle"); ui.drag([300, 300], [380, 360]);
+  const side = textOf(byId(ui.tree(), "draw-side"));
+  expect(side).toContain("⌃D");                                              // duplicate chip
+  expect(side).toContain("⌃]");
+  expect(side).toContain("⌃⇧L");
+  expect(side).toContain("⌘G");                                              // not taken here: stays ⌘
+  ui.key("/", { shift: true });
+  const help = textOf(byId(ui.tree(), "help-overlay"));
+  expect(help).toContain("⌃A");
+  expect(help).toContain("your Herdr keys");
+  ui.key("escape");
+  const before = calls.exec.length;
+  ui.key("c", { control: true });                                            // ⌃C copies like ⌘C
+  expect(calls.exec.slice(before).some(c => c[0] === "sh" && c[3] === "copy")).toBe(true);
+  const n = ui.view.ed.doc.live().length;
+  ui.key("d", { control: true });                                            // ⌃D duplicates
+  expect(ui.view.ed.doc.live().length).toBeGreaterThan(n);
+  writeFileSync(`${home}/keys.json`, "{}");
+});

@@ -20,7 +20,7 @@ import { isShape, isLabel, layerOf } from "./core/model.js";
 import { toSvg, RASTER_FACES } from "./svg.js";
 import { FileStore } from "./store.js";
 import { readText, writeText } from "./io.js";
-import { SHORTCUTS } from "./core/shortcuts.js";
+import { SHORTCUTS, takenKeys, fitKeys } from "./core/shortcuts.js";
 import { demoScene } from "./core/demo.js";
 import { rankBoards, newBoardPath, parseRecent, pushRecent, parseListing, boardName, folderOf, tilde } from "./core/boards.js";
 import { emptyScene } from "./core/model.js";
@@ -131,6 +131,8 @@ export default class Draw extends View {
     this.pickInput.on("submit", (e, cx) => { if (e?.secondary) this.pickCreate(cx); else this.pickOpen(cx); });
     this.boardList = null; this.recent = []; this.pv = new Map();   // listing, recent boards, previews by path
     this.textOpen = false; this.renaming = null;
+    this.taken = new Set();   // ⌘ keys the person's Herdr takes first (keys.json): shown as ⌃ here
+    this.loadKeys(cx);
     this.flash = null; this.sidebar = p.sidebar ?? true; this.selKey = "";
     this.help = false;      // the ? overlay
     this.board = null;      // while the demo plays: the person's own editor, kept aside (the demo is never saved)
@@ -167,7 +169,7 @@ export default class Draw extends View {
         else if (c === "play") this.ed.playToggle();
         else if (c === "export") { if (this.file) await this.exportBoard(); }
         else if (c === "write") this.ed.beginText(null, this.ed.toWorld({ x: this.size.w / 3, y: this.size.h / 3 }));   // start typing (no mouse needed)
-        else if (c === "help") this.help = !this.help;
+        else if (c === "help") { this.help = !this.help; if (this.help) this.loadKeys(cx); }
         else if (c === "demo") { if (this.board) this.endDemo(); else this.startDemo(); }
         else if (c === "open") { if (this.picker) this.closePicker(cx); else this.openPicker(cx); }
         else if (c === "focus") { cx.timer.after(60, () => { if (panes().find(q => q.focused)?.mod === MOD) this.handle.focus(); }); continue; }
@@ -175,6 +177,12 @@ export default class Draw extends View {
       }
     });
   }
+
+  loadKeys(cx) {
+    cx.spawn(async cx => { try { this.taken = takenKeys(await readTextFile(`${appHome()}/keys.json`)); cx.notify(); } catch {} });
+  }
+  // A key label as it works in this Herdr: ⌘X becomes ⌃X when keys.json gives ⌘X to something else.
+  kk(label) { return typeof label === "string" ? fitKeys(label, this.taken) : label; }
 
   newEditor() { const ed = new Editor({ onOp: op => { if (!op.transient) this.dirty = true; } }); ed.setSize(this.size?.w ?? 900, this.size?.h ?? 600); return ed; }
 
@@ -344,7 +352,7 @@ export default class Draw extends View {
         .child(h_flex().gap(8).items_center()
           .child(div().text_size(15).font_semibold().child("Boards"))
           .child(div().flex_1())
-          .child(div().text_size(11).text_color(t.dim).child("↑↓ move · Enter open · ⌘Enter new · Esc close")))
+          .child(div().text_size(11).text_color(t.dim).child(this.kk("↑↓ move · Enter open · ⌘Enter new · Esc close"))))
         .child(Input.new(this.pickInput).h(30).text_size(13))
         .child(h_flex().gap(12).items_start()
           .child(list)
@@ -436,13 +444,14 @@ export default class Draw extends View {
     if (this.ed.text && !this.inputFocused) { if (this.typeFallback(e, cx)) cx.stop_propagation(); return; }
     if (this.ed.text && (e.key === "escape" || (e.key === "enter" && (e.modifiers?.platform || e.modifiers?.control)))) { this.ed.setText(this.input.value()); this.ed.commitText(); cx.stop_propagation(); return this.after(cx); }
     const ed = this.ed, m = e.modifiers ?? {}, mm = { shift: m.shift, alt: m.alt, cmd: m.platform, ctrl: m.control };
-    if (!ed.text && m.platform && (e.key === "c" || e.key === "x")) {
+    const cmd = m.platform || m.control;   // ⌃ works wherever ⌘ does (the person's Herdr may own the ⌘ key)
+    if (!ed.text && cmd && !m.shift && (e.key === "c" || e.key === "x")) {
       // The system clipboard gets Excalidraw's format, so paste works in excalidraw.com too.
       const text = ed.copy();
       if (text) { exec("sh", ["-c", 'printf %s "$1" | LANG=en_US.UTF-8 pbcopy', "copy", text]); if (e.key === "x") ed.deleteIds([...ed.sel]); this.flash = "copied"; }
       cx.stop_propagation(); return this.after(cx);
     }
-    if (!ed.text && m.platform && e.key === "v") {
+    if (!ed.text && cmd && !m.shift && e.key === "v") {
       cx.spawn(async cx => {
         const r = await exec("sh", ["-c", "LANG=en_US.UTF-8 pbpaste"]);
         if ((r.stdout ?? "").trim()) ed.paste(r.stdout);
@@ -454,7 +463,7 @@ export default class Draw extends View {
       });
       cx.stop_propagation(); return;
     }
-    if (!ed.text && m.platform && m.shift && e.key === "e") { if (this.board) { this.flash = "the demo isn't saved or exported: Esc goes back to your board"; cx.stop_propagation(); return this.after(cx); } cx.spawn(async cx => { await this.exportBoard(); cx.notify(); }); cx.stop_propagation(); return this.after(cx); }
+    if (!ed.text && cmd && m.shift && e.key === "e") { if (this.board) { this.flash = "the demo isn't saved or exported: Esc goes back to your board"; cx.stop_propagation(); return this.after(cx); } cx.spawn(async cx => { await this.exportBoard(); cx.notify(); }); cx.stop_propagation(); return this.after(cx); }
     if (!ed.text && !m.platform && !m.control && e.key === "i") { this.sidebar = !this.sidebar; cx.stop_propagation(); return this.after(cx); }
     if (ed.key(e.key, mm)) { cx.stop_propagation(); this.after(cx); }
   }
@@ -580,7 +589,7 @@ export default class Draw extends View {
   button(t, id, label, active, tip, fn) {
     return div().id(id).h(26).min_w(26).px(5).rounded(6).flex().items_center().justify_center().gap(3)
       .bg(active ? t.accent : CLEAR).text_color(active ? t.accent_foreground : t.foreground)
-      .hover(s => s.bg(active ? t.accent : t.hover)).cursor_pointer().tooltip(tip)
+      .hover(s => s.bg(active ? t.accent : t.hover)).cursor_pointer().tooltip(this.kk(tip))
       .on_click((_e, cx) => { fn(); this.handle.focus(); this.after(cx); }).child(label);
   }
 
@@ -750,7 +759,7 @@ export default class Draw extends View {
       .child(v_flex().items_center().gap(6).text_color(t.dim).text_size(13)
         .child(div().text_size(16).text_color(t.muted).child("Empty board"))
         .child(div().child("r ▭   d ◇   o ◯   a →   l ╱   p ✎   t T   f frame   e eraser   k laser"))
-        .child(div().child("double-click to write · drag empty space to select · ⌘Z undo · i panels"))
+        .child(div().child(this.kk("double-click to write · drag empty space to select · ⌘Z undo · I panels · ? every key")))
         .child(div().child("drop or paste an image to put it on the board"))
         .child(div().child("agents: drawh add / arrow / ls / sel"))
         .child(h_flex().gap(8).mt(6)
@@ -783,8 +792,9 @@ export default class Draw extends View {
     const group = ([title, rows]) => v_flex().gap(3).w(320)
       .child(div().text_size(10).font_semibold().text_color(t.dim).mb(2).child(title.toUpperCase()))
       .children(rows.map(([keys, what]) => h_flex().gap(8).items_center()
-        .child(h_flex().w(104).flex_shrink_0().justify_end().child(kb(keys)))
-        .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).child(what))));   // min_w(0): long ones wrap, never spill into the next column
+        .child(h_flex().w(104).flex_shrink_0().justify_end().child(kb(this.kk(keys))))
+        .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).child(this.kk(what)))));
+    const moved = SHORTCUTS.flatMap(([, rows]) => rows).filter(([k]) => this.kk(k) !== k).map(([k]) => k);   // min_w(0): long ones wrap, never spill into the next column
     return div().id("help-overlay").absolute().top(0).left(0).size_full().bg(withAlpha(t.background, 0.82)).flex().items_center().justify_center()
       .on_mouse_down("left", (_e, cx) => { cx.stop_propagation(); this.help = false; this.after(cx); })
       .on_scroll_wheel((_e, cx) => cx.stop_propagation())
@@ -795,6 +805,7 @@ export default class Draw extends View {
           .child(div().flex_1())
           .child(this.chip(t, "help-demo", "▶  play the demo  D", false, "A short animated tour (not saved)", () => this.startDemo(), 130))
           .child(this.chip(t, "help-close", "close  Esc", false, "Close (Esc or ?)", () => { this.help = false; }, 70)))
+        .when(moved.length > 0, e => e.child(div().text_size(11).text_color(t.dim).child(`⌃ where you'd expect ⌘: your Herdr keys (keys.json) already use ${moved.join(", ").replace(/\s+/g, " ")}, so this board answers to ⌃ for them.`)))
         .child(h_flex().flex_wrap().gap(18).items_start().children(SHORTCUTS.map(group))));
   }
 
@@ -816,13 +827,13 @@ export default class Draw extends View {
   }
 
   // A chip's label with its key after it, small and dim.
-  keyed(t, label, key) { return h_flex().gap(3).items_center().child(div().child(label)).child(div().text_size(9).text_color(t.dim).child(key)); }
+  keyed(t, label, key) { return h_flex().gap(3).items_center().child(div().child(label)).child(div().text_size(9).text_color(t.dim).child(this.kk(key))); }
 
   chip(t, id, label, active, tip, fn, w = 26) {
     return div().id(id).h(24).min_w(w).px(4).rounded(5).flex().items_center().justify_center().text_size(12)
       .border(1).border_color(active ? t.accent : t.border).bg(active ? withAlpha(t.accent, 0.18) : CLEAR)
-      .hover(s => s.bg(t.hover)).cursor_pointer().tooltip(tip)
-      .on_click((_e, cx) => { fn(cx); this.handle.focus(); this.after(cx); }).child(label);
+      .hover(s => s.bg(t.hover)).cursor_pointer().tooltip(this.kk(tip))
+      .on_click((_e, cx) => { fn(cx); this.handle.focus(); this.after(cx); }).child(this.kk(label));
   }
 
   swatch(t, id, color, active, fn) {

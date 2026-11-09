@@ -78,3 +78,27 @@ export const SHORTCUTS = [
     ["⌘⇧B", "Anywhere in Herdr: a new pane, pick or make a board"],
   ]],
 ];
+
+// ── keys the person's Herdr already uses ──
+// Herdr's keys.json wins over a pane's own keys (a more specific section wins; `mod:herdr-draw` beats
+// `global`). The board takes ⌃ wherever it takes ⌘, so a ⌘ shortcut whose key Herdr has is shown as ⌃.
+
+// The keys Herdr will take before a board sees them: global and layout sections, minus mod:herdr-draw.
+export function takenKeys(keysJson) {
+  let k; try { k = typeof keysJson === "string" ? JSON.parse(keysJson) : keysJson; } catch { return new Set(); }
+  if (!k || typeof k !== "object") return new Set();
+  const out = new Set();
+  for (const [sec, map] of Object.entries(k)) if ((sec === "global" || sec.startsWith("layout:")) && map && typeof map === "object") for (const key of Object.keys(map)) out.add(key.toLowerCase());
+  for (const key of Object.keys(k["mod:herdr-draw"] ?? {})) out.delete(key.toLowerCase());
+  return out;
+}
+
+const KEY_NAME = { "Enter": "enter", "Space": "space", "Delete": "backspace" };
+// "⌘A", "⌘⇧L", "⌘]  ⌘[", "⌘=  ⌘-  ⌘0" → the same with ⌃ for each ⌘ key in `taken` (and its ⌃ key free).
+export function fitKeys(label, taken) {
+  if (!taken?.size) return label;
+  return String(label).replace(/⌘(⇧?)(Enter|Space|Delete|[A-Za-z0-9[\]=\-+'/.,;])/g, (all, shift, key) => {
+    const name = KEY_NAME[key] ?? key.toLowerCase(), mods = shift ? "shift-" : "";
+    return taken.has(`cmd-${mods}${name}`) && !taken.has(`ctrl-${mods}${name}`) ? `⌃${shift}${key}` : all;
+  });
+}

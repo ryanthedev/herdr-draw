@@ -36,7 +36,7 @@ Herdr-draw data lives where Excalidraw keeps foreign data: `customData.{layer,z,
 
 ## Dev loop
 
-- `bun test` (205 tests). `drawh mermaid` runs core/mermaid.js through node (or bun), so agents and the pane lay out alike. Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
+- `bun test` (208 tests). `drawh mermaid` runs core/mermaid.js through node (or bun), so agents and the pane lay out alike. Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
 - `scripts/dev-sync.sh` builds `build/herdr-draw` (adapter + core + svg + drawh) and installs a **copy** into `~/.config/herdr-app/mods/herdr-draw`.
 - `scripts/install.sh` installs **HEAD** into the person's Herdr (ignores `HERDR_APP_HOME`): run it after commits the person
   should test. If `.git/hooks/post-commit` exists (`scripts/install-hook.sh`), every commit to `main` installs itself. ⌘⇧B opens a scratch board. Their notes: `FEEDBACK.md`.
@@ -76,6 +76,9 @@ sent only to that window's id; quit it by its pid when done.
   while fresh loads and reloads in a test window work (herdr-md hit the same message). The old build keeps
   running in that pane; reopening the pane loads the new one.
 
+- The person's keys.json wins over the pane's own keys (Herdr: the more specific section wins, `mod:herdr-draw` beats
+  `global`). The board takes ⌃ wherever it takes ⌘; `takenKeys`/`fitKeys` (core/shortcuts.js) read keys.json and every
+  label, tooltip and help row shows ⌃X when ⌘X is taken. New ⌘ shortcuts: handle ⌃ too, and pass labels through `kk()`.
 - Never keep an event's `cx` past its handler (stored in a closure, `.then()` on it, handed to a timer later): GPUI rejects it (see `Context` in `gpui-kit.d.ts`). Use the async `cx` from `cx.spawn`/timer callbacks. `test/harness/gpui-fake.js` throws `stale cx` when this happens.
 - `appState.herdr` (layers, grid) has no version: if the pane changes layers and `drawh` writes within the 250 ms save window, the layer change can be lost (elements survive on the base layer).
 - `pbcopy` gets the clipboard JSON as a shell argument; a huge selection could pass the argv limit.

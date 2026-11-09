@@ -50,3 +50,27 @@ test("the demo is a board that plays: animated shapes, bound arrows, labels with
   const last = els[els.length - 2];
   expect(last.customData.anim.start).toBeGreaterThan(ed.duration() - 2000);
 });
+
+import { takenKeys, fitKeys } from "../core/shortcuts.js";
+
+test("a ⌘ key the person's Herdr uses shows as ⌃, which the board takes too", () => {
+  const taken = takenKeys(JSON.stringify({ global: { "cmd-a": "agent.next", "cmd-d": "pane.split:right", "cmd-]": "agent.next", "cmd-shift-l": "x", "ctrl-1": "space.select:1" },
+    "layout:matrix": { "cmd-g": "x" }, terminal: { "cmd-c": "terminal.copy" }, "mod:herdr-draw": { "cmd-d": "herdr-draw.duplicate" } }));
+  expect(fitKeys("⌘A", taken)).toBe("⌃A");
+  expect(fitKeys("⌘D", taken)).toBe("⌘D");                      // mod:herdr-draw gave it back
+  expect(fitKeys("⌘]  ⌘[", taken)).toBe("⌃]  ⌘[");
+  expect(fitKeys("⌘G  ⌘⇧G", taken)).toBe("⌃G  ⌘⇧G");          // any layout's keys count
+  expect(fitKeys("⌘⇧L", taken)).toBe("⌃⇧L");
+  expect(fitKeys("⌘C  ⌘X  ⌘V", taken)).toBe("⌘C  ⌘X  ⌘V");    // terminal-only keys don't reach a board
+  expect(fitKeys("Lock (⌘⇧L)", taken)).toBe("Lock (⌃⇧L)");
+  expect(takenKeys("not json").size).toBe(0);
+});
+
+test("every ⌘ shortcut the board lists also works with ⌃", () => {
+  for (const [, rows] of SHORTCUTS) for (const [keys, , probe] of rows) {
+    if (!probe || !probe[1].cmd) continue;
+    const t = prepared(probe[2]), before = state(t.ed);
+    expect(t.ed.key(probe[0], { ...probe[1], cmd: false, ctrl: true })).toBe(true);
+    expect(state(t.ed)).not.toBe(before);
+  }
+});
