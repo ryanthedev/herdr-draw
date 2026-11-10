@@ -641,6 +641,87 @@ test("panel: tabs show one section at a time; ⚙ hides, reorders and resets sec
   await freshPanel();
 });
 
+// The picker's hex field, found by its wrapper (not "the first input").
+const hexField = ui => {
+  const n = find(byId(ui.tree(), "cp-hex"), n => n.kind === "input");
+  return n && { state: n.state, focus: () => n.state.focus(), type: t => ui.cx.call(c => n.state.type(t, c)), submit: (ev = {}) => ui.cx.call(c => n.state.submit(c, ev)) };
+};
+
+test("color picker: grid, hex field, recent, save and remove, fill none; fits a 180 px panel", async () => {
+  await freshPanel();
+  const { panelState } = await panelStore();
+  const ui = await open();
+  ui.click("tool-rectangle"); ui.drag([300, 300], [380, 360]);
+  const sel = () => ui.view.ed.selected()[0], saved = () => JSON.parse(readFileSync(`${home}/herdr-draw/panel.json`, "utf8")).palette;
+  expect(byId(ui.tree(), "cp-stroke")).toBe(null);                           // closed: nothing drawn
+  ui.click("st-pick");
+  expect(byId(ui.tree(), "cp-stroke")).toBeTruthy();
+  // A grid swatch: the selection takes it, recent remembers it, the row shows it as a custom color.
+  const pick = byId(ui.tree(), "cp-g-2-4").style.bg;
+  ui.click("cp-g-2-4");
+  expect(sel().strokeColor).toBe(pick);
+  expect(panelState().recent[0]).toBe(pick);
+  expect(byId(ui.tree(), "cp-g-2-4").style.border).toBe(2);                 // active in the grid
+  expect(byId(ui.tree(), "st-cur").style.border).toBe(2);                    // and in the row
+  expect(byId(ui.tree(), "cp-r-0").style.bg).toBe(pick);
+  // The hex field: board keys stay off while it has the keyboard (C would cycle the stroke).
+  const hex = hexField(ui);
+  expect(hex.state.value()).toBe(pick);
+  hex.focus();
+  ui.key("c");
+  expect(sel().strokeColor).toBe(pick);
+  hex.type("not a color"); hex.submit();
+  expect(sel().strokeColor).toBe(pick);
+  expect(textOf(byId(ui.tree(), "cp-msg"))).toContain("isn't a color");
+  hexField(ui).type("2B8A3E"); hexField(ui).submit();
+  expect(sel().strokeColor).toBe("#2b8a3e");
+  expect(panelState().recent.slice(0, 2)).toEqual(["#2b8a3e", pick]);
+  expect(byId(ui.tree(), "cp-msg")).toBe(null);
+  // Save: the color joins the Stroke row (and panel.json); ✕ takes it out again.
+  ui.click("cp-save");
+  expect(byId(ui.tree(), "st-own-0").style.bg).toBe("#2b8a3e");
+  expect(byId(ui.tree(), "st-cur")).toBe(null);
+  await ui.cx.flush();
+  expect(saved().stroke).toEqual(["#2b8a3e"]);
+  ui.click("cp-x-0");
+  expect(byId(ui.tree(), "st-own-0")).toBe(null);
+  expect(byId(ui.tree(), "st-cur")).toBeTruthy();
+  await ui.cx.flush();
+  expect(saved().stroke).toEqual([]);
+  // Fill: its own picker (the stroke one closes); "none" takes the fill away.
+  ui.click("fi-pick");
+  expect(byId(ui.tree(), "cp-stroke")).toBe(null);
+  expect(byId(ui.tree(), "cp-fill")).toBeTruthy();
+  ui.click("cp-g-0-6");
+  expect(sel().backgroundColor).toBe(byId(ui.tree(), "cp-g-0-6").style.bg);
+  ui.click("cp-none");
+  expect(sel().backgroundColor).toBe("transparent");
+  expect(panelState().recent[0]).toBe("transparent");
+  expect(byId(ui.tree(), "cp-none").style.border_color).toBe(byId(ui.tree(), "fi-pick").style.border_color);   // active, as the open + is
+  // The narrowest panel still draws it: cells share the width, no fixed widths.
+  ui.click("side-gear"); ui.click("ps-w-narrow"); ui.click("side-gear");
+  expect(byId(ui.tree(), "draw-side").style.w).toBe(180);
+  const cell = byId(ui.tree(), "cp-g-4-12");
+  expect(cell.style.flex_1).toBe(true);
+  expect(cell.style.w).toBeUndefined();
+  ui.click("fi-pick");                                                       // + again closes it
+  expect(byId(ui.tree(), "cp-fill")).toBe(null);
+  await freshPanel();
+});
+
+test("color picker: Escape in the hex field closes the picker and gives the board its keys back", async () => {
+  await freshPanel();
+  const ui = await open();
+  ui.click("st-pick");
+  hexField(ui).focus();
+  ui.key("escape");
+  expect(byId(ui.tree(), "cp-stroke")).toBe(null);
+  const before = ui.view.ed.style.strokeColor;
+  ui.key("c");                                                               // a board key again
+  expect(ui.view.ed.style.strokeColor).not.toBe(before);
+  await freshPanel();
+});
+
 // ── a board on another machine (a space's `machine`): read, written and polled through exec's `on` ──
 test("a board on another machine opens, saves, picks up an agent's writes, and shows in the picker", async () => {
   const dir = mkdtempSync(`${tmpdir()}/herdr-draw-ska-`), rf = `${dir}/journeys.excalidraw`;

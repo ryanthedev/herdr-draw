@@ -84,7 +84,7 @@ boards open in excalidraw.com in Safari; a canvas adapter on core (touch → poi
 ## Side panel (2026-11-09, sixth session; the person asked for resize, pop-out, collapse, tabs, own colors)
 
 Plan (advisor-reviewed), one commit per phase: (1) core model + color math ✓ (2) resize, fold, reorder ✓ (3) tabs ✓
-(4) color picker + the person's palette (5) pop-out as a Herdr floating window (`openOverlay({kind: "window", key, keep})`).
+(4) color picker + the person's palette ✓ (inline under Stroke/Fill via "+"; seen only on the fake GPUI so far) (5) pop-out as a Herdr floating window (`openOverlay({kind: "window", key, keep})`).
 - Hand-built, not Herdr's DockArea: the fake GPUI can't draw DockArea/h_resizable/Tabs, and DockArea keeps layout outside core.
 - Settings are the person's, not per pane: `<appHome>/herdr-draw/panel.json` via `panel-store.js` (module state shared by
   every copy; `panelChanged()` wakes each pane's own spawn loop, so no pane holds another's cx). I still hides it per pane.

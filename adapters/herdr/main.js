@@ -26,6 +26,7 @@ import { rankBoards, newBoardPath, parseRecent, pushRecent, parseListing, boardN
 import { emptyScene } from "./core/model.js";
 import { panelLayout, panelSections, dragWidth, titleOf, WIDTH } from "./core/panel.js";
 import { panelState, loadPanel, changePanel, savePanel, panelChanged } from "./panel-store.js";
+import { colorRow, pickerModel, parseColorInput, inkOn } from "./core/color.js";
 
 const MOD = "herdr-draw";
 // Boards: new ones go in ~/boards; the recent list is shared by every board pane.
@@ -182,6 +183,19 @@ export default class Draw extends View {
     this.input.on("blur", (_e, cx) => { this.inputFocused = false; if (this.ed.text) { this.ed.commitText(); this.after(cx); } });
     this.layerInput = InputState.new({ value: "", placeholder: "Layer name" });
     this.layerInput.on("submit", (_e, cx) => { if (this.renaming) this.ed.updateLayer(this.renaming, { name: this.layerInput.value() || "Layer" }); this.renaming = null; this.handle.focus(); this.after(cx); });
+    // The color picker under the Stroke or Fill row: which one is open (this pane only), its hex
+    // field and the field's last message. While the field has the keyboard, board keys stay off
+    // (hex letters are shortcuts: C cycles strokes, B fills).
+    this.colorPick = null; this.hexMsg = null; this.hexFocused = false;
+    this.hexInput = InputState.new({ value: "", placeholder: "#rrggbb" });
+    this.hexInput.on("focus", () => { this.hexFocused = true; });
+    this.hexInput.on("blur", () => { this.hexFocused = false; });
+    this.hexInput.on("submit", (_e, cx) => {
+      const r = parseColorInput(this.hexInput.value());
+      if (r.error) { this.hexMsg = r.error; return cx.notify(); }
+      this.applyColor(this.colorPick, r.color);
+      this.hexFocused = false; this.handle.focus(); this.after(cx);
+    });
     this.lib = new LibraryStore({ onChange: () => { this.previews.clear(); }, onError: m => { this.flash = m; } });
     this.previews = new Map();   // library item id → its preview's path layers
     cx.spawn(async acx => { await this.lib.start(acx); });
@@ -484,6 +498,10 @@ export default class Draw extends View {
 
   keys(e, cx) {
     if (this.renaming) return;
+    if (this.hexFocused) {   // typing a hex: Escape closes the picker, every other key is the field's
+      if (e.key === "escape") { this.closeColorPick(); this.handle.focus(); cx.stop_propagation(); cx.notify(); }
+      return;
+    }
     if (this.picker) return this.pickKeys(e, cx);
     if (!this.ed.text && (e.modifiers?.platform || e.modifiers?.control) && !e.modifiers?.shift && e.key === "o") { this.openPicker(cx); cx.stop_propagation(); return cx.notify(); }
     if (this.help) {   // the overlay takes every key: ? or Esc closes it, D plays the demo
@@ -1018,6 +1036,66 @@ export default class Draw extends View {
       .when(color === "transparent", e => e.child("∅"));
   }
 
+  // ── colors: the Stroke and Fill rows, and the picker under one of them ──
+  // What colorRow / pickerModel (core/color.js) say to show; this only draws and wires clicks.
+  colorKey(kind) { return kind === "fill" ? "backgroundColor" : "strokeColor"; }
+  currentColor(kind) { const ed = this.ed, k = this.colorKey(kind); return (ed.selected()[0] ?? ed.style)[k] ?? ed.style[k]; }
+  // A picked color (grid, hex, recent, saved, none): style the selection, or the next shape, and remember it.
+  applyColor(kind, color) {
+    if (!kind) return;
+    this.ed.setStyle({ [this.colorKey(kind)]: color });
+    changePanel({ type: "used", color });
+    this.hexInput.set_value(color === "transparent" ? "" : color); this.hexMsg = null;
+  }
+  toggleColorPick(kind) {
+    if (this.colorPick === kind) return this.closeColorPick();
+    this.colorPick = kind; this.hexMsg = null; this.hexFocused = false;
+    const c = this.currentColor(kind);
+    this.hexInput.set_value(c && c !== "transparent" ? c : "");
+  }
+  closeColorPick() { this.colorPick = null; this.hexMsg = null; this.hexFocused = false; }
+
+  colorSwatches(t, kind) {
+    const pre = kind === "fill" ? "fi" : "st", fixed = kind === "fill" ? FILLS : STROKES, open = this.colorPick === kind;
+    const r = colorRow(fixed, panelState().palette[kind], this.currentColor(kind)), set = c => () => this.ed.setStyle({ [this.colorKey(kind)]: c });
+    return [
+      ...r.fixed.map((c, i) => this.swatch(t, `${pre}-${i}`, c.color, c.active, set(c.color))),
+      ...r.saved.map((c, i) => this.swatch(t, `${pre}-own-${i}`, c.color, c.active, set(c.color))),
+      r.custom && this.swatch(t, `${pre}-cur`, r.custom, true, () => {}),
+      this.chip(t, `${pre}-pick`, open ? "−" : "+", open, open ? "Close the color picker" : "Any color: a grid, a hex code, your saved and recent colors",
+        () => this.toggleColorPick(kind), 22),
+    ].filter(Boolean);
+  }
+
+  colorPicker(t, kind) {
+    const st = panelState(), m = pickerModel({ kind, fixed: kind === "fill" ? FILLS : STROKES, saved: st.palette[kind], recent: st.recent, current: this.currentColor(kind) });
+    const apply = c => () => this.applyColor(kind, c);
+    const label = s => div().text_size(9).text_color(t.dim).font_semibold().child(s);
+    // 5 × 13 cells that share the width (so the grid fits a 180 px panel), fixed height.
+    const cell = (c, id) => div().id(id).flex_1().min_w(0).h(14).bg(c.color).cursor_pointer()
+      .when(c.active, e => e.border(2).border_color(inkOn(c.color)))
+      .on_click((_e, cx) => { this.applyColor(kind, c.color); this.handle.focus(); this.after(cx); });
+    const grid = v_flex().id("cp-grid").w_full().gap(1).rounded(4).overflow_hidden()
+      .children(m.grid.map((row, r) => h_flex().w_full().gap(1).children(row.map((c, i) => cell(c, `cp-g-${r}-${i}`)))));
+    const field = h_flex().w_full().gap(4).items_center()
+      .child(div().id("cp-hex").flex_1().min_w(0).child(Input.new(this.hexInput).h(24).text_size(12)))
+      .child(this.chip(t, "cp-save", "save", false, m.canSave ? `Keep this color in the ${kind === "fill" ? "Fill" : "Stroke"} row` : "Already in the row",
+        () => { if (m.canSave) changePanel({ type: "addColor", kind, color: this.currentColor(kind) }); }, 36))
+      .when(!!m.none, e => e.child(this.chip(t, "cp-none", "none", m.none.active, "No fill", apply("transparent"), 36)));
+    const saved = m.saved.map((c, i) => h_flex().gap(1).items_center()
+      .child(this.swatch(t, `cp-s-${i}`, c.color, c.active, apply(c.color)))
+      .child(div().id(`cp-x-${i}`).w(12).h(18).flex().items_center().justify_center().text_size(9).text_color(t.dim).cursor_pointer()
+        .hover(s => s.text_color(t.foreground)).tooltip("Remove from the row")
+        .on_click((_e, cx) => { changePanel({ type: "removeColor", kind, color: c.color }); this.handle.focus(); this.after(cx); }).child("✕")));
+    return v_flex().id(`cp-${kind}`).w_full().gap(6).p(6).rounded(6).border(1).border_color(t.border)
+      .child(grid)
+      .child(field)
+      .when(!!this.hexMsg, e => e.child(div().id("cp-msg").text_size(10).text_color(t.blocked ?? t.dim).child(this.hexMsg)))
+      .when(m.recent.length > 0, e => e.child(label("RECENT")).child(h_flex().w_full().flex_wrap().gap(4)
+        .children(m.recent.map((c, i) => this.swatch(t, `cp-r-${i}`, c.color, c.active, apply(c.color))))))
+      .when(saved.length > 0, e => e.child(label("SAVED")).child(h_flex().w_full().flex_wrap().gap(4).children(saved)));
+  }
+
   properties(t) {
     const ed = this.ed, cur = ed.selected()[0] ?? ed.style, s = k => cur[k] ?? ed.style[k];
     // A row's label carries its key (C, B, W…): the panels teach the keys as they are used.
@@ -1025,8 +1103,10 @@ export default class Draw extends View {
       .child(h_flex().w(44).flex_shrink_0().gap(3).items_center().child(div().text_size(11).text_color(t.muted).child(label)).when(!!key, e => e.child(div().text_size(9).text_color(t.dim).child(key))))
       .child(h_flex().flex_1().flex_wrap().gap(4).children(kids));
     const body = v_flex().gap(6)
-      .child(row("Stroke", STROKES.map((c, i) => this.swatch(t, `st-${i}`, c, s("strokeColor") === c, () => ed.setStyle({ strokeColor: c }))), "C"))
-      .child(row("Fill", FILLS.map((c, i) => this.swatch(t, `fi-${i}`, c, s("backgroundColor") === c, () => ed.setStyle({ backgroundColor: c }))), "B"))
+      .child(row("Stroke", this.colorSwatches(t, "stroke"), "C"))
+      .when(this.colorPick === "stroke", e => e.child(this.colorPicker(t, "stroke")))
+      .child(row("Fill", this.colorSwatches(t, "fill"), "B"))
+      .when(this.colorPick === "fill", e => e.child(this.colorPicker(t, "fill")))
       .child(row("Width", WIDTHS.map((w, i) => this.chip(t, `w-${w}`, ["thin", "bold", "extra"][i], s("strokeWidth") === w, `Stroke ${w}px (W)`, () => ed.setStyle({ strokeWidth: w }), 40)), "W"))
       .child(row("Style", STYLES.map(v => this.chip(t, `ss-${v}`, { solid: "—", dashed: "- -", dotted: "···" }[v], s("strokeStyle") === v, `${v} (S)`, () => ed.setStyle({ strokeStyle: v }))), "S"))
       .child(row("Sketch", [0, 1, 2].map(r => this.chip(t, `ro-${r}`, ["clean", "sketch", "loose"][r], s("roughness") === r, "Roughness (G toggles)", () => ed.setStyle({ roughness: r }), 44)), "G"))
