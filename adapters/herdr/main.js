@@ -210,6 +210,9 @@ export default class Draw extends View {
     });
   }
 
+  // Herdr closes this pane (or quits): no more checks on another machine's board.
+  async close() { this.store?.stop(); }
+
   loadKeys(cx) {
     cx.spawn(async cx => { try { this.taken = takenKeys(await readTextFile(`${appHome()}/keys.json`)); cx.notify(); } catch {} });
   }

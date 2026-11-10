@@ -3,7 +3,7 @@
 // network transport can sit beside it (or replace it) without touching the editor.
 
 import { watchFolder } from "herdr";
-import { readText, writeText, remoteChanged } from "./io.js";   // any size (Herdr's own stop at 1 MiB), here or on another machine
+import { readText, writeText, remoteChanged, remoteBusy } from "./io.js";   // any size (Herdr's own stop at 1 MiB), here or on another machine
 import { emptyScene } from "./core/model.js";
 
 const SAVE_DELAY = 250;
@@ -95,19 +95,26 @@ export class FileStore {
   }
 
   // Another machine's file can't be watched: look at its stamp every POLL_MS (one small command).
+  // A slow or unreachable machine backs the checks off (up to a minute); the pane closing stops them.
   poll(cx) {
-    let busy = false;
+    let busy = false, skip = 0, backoff = 0;
     const t = cx.timer.every(POLL_MS, async cx => {
       if (this.stopped) { t.cancel(); return; }
-      if (busy || this.saving) return;
+      if (busy || this.saving || remoteBusy()) return;
+      if (skip > 0) { skip--; return; }
       busy = true;
       try {
-        if (!(await remoteChanged(this.file, this.on))) return;
+        const changed = await remoteChanged(this.file, this.on);
+        if (backoff) { backoff = 0; this.onError(null); cx.notify(); }
+        if (!changed) return;
         const text = await this.read();
         if (this.stopped || text === null || text === this.disk) return;
         if (this.ed.g) { this.pending = text; return; }
         this.absorb(text, cx);
-      } catch (e) { this.onError(`Can't reach ${this.on}: ${e?.message ?? e}`); cx.notify(); }
+      } catch (e) {
+        backoff = Math.min(40, backoff ? backoff * 2 : 2); skip = backoff;
+        this.onError(`Can't reach ${this.on}: ${e?.message ?? e}`); cx.notify();
+      }
       finally { busy = false; }
     });
   }

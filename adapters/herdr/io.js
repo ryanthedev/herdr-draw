@@ -97,13 +97,27 @@ export async function writeText(path, text, expected, { on = null } = {}) {
 // board and is renamed over it only if the stamp is still the one we read (in one shell, on that
 // machine), and the pane polls the stamp to see other writers. BSD stat: a macOS machine.
 
+// Herdr caps a mod at 16 commands running at once, for every copy together. Commands to another
+// machine are slow (a network hop) and a stuck one would hold its slot for good, so they go through
+// one queue: at most REMOTE_MAX at a time, each given up after REMOTE_TIMEOUT.
+const REMOTE_MAX = 4, REMOTE_TIMEOUT = 20000;
+let running = 0;
+const queue = [];
+export const remoteBusy = () => running >= REMOTE_MAX;
+async function rexec(cmd, args, on) {
+  if (running >= REMOTE_MAX) await new Promise(r => queue.push(r));
+  running++;
+  try { return await exec(cmd, args, { on, timeout: REMOTE_TIMEOUT }); }
+  finally { running--; queue.shift()?.(); }
+}
+
 const REMOTE_PART = 128 * 1024;   // chars per argument: at most 384 KiB of UTF-8, under macOS's ~1 MiB argv
 const seen = new Map();            // "machine\0path" → { text, stamp } as last read or written
 const key = (on, path) => `${on}\0${path}`;
 const STAT = 'stat -f "%i:%m:%z" "$1" 2>/dev/null || echo none';
 
 async function readRemote(path, on) {
-  const r = await exec("sh", ["-c", `s=$(${STAT}); [ "$s" = none ] && { echo none; exit 0; }; echo "$s"; cat "$1"`, "board-read", path], { on });
+  const r = await rexec("sh", ["-c", `s=$(${STAT}); [ "$s" = none ] && { echo none; exit 0; }; echo "$s"; cat "$1"`, "board-read", path], on);
   if (r.code !== 0) throw new Error(r.stderr?.trim() || `can't read ${path} on ${on}`);
   const nl = r.stdout.indexOf("\n"), stamp = (nl < 0 ? r.stdout : r.stdout.slice(0, nl)).trim();
   const text = stamp === "none" ? null : r.stdout.slice(nl + 1);
@@ -113,7 +127,7 @@ async function readRemote(path, on) {
 
 // The file's stamp on that machine now ("none": no file).
 export async function remoteStamp(path, on) {
-  const r = await exec("sh", ["-c", STAT, "board-stat", path], { on });
+  const r = await rexec("sh", ["-c", STAT, "board-stat", path], on);
   if (r.code !== 0) throw new Error(r.stderr?.trim() || `can't reach ${on}`);
   return r.stdout.trim();
 }
@@ -139,18 +153,18 @@ async function writeRemote(path, text, expected, on) {
       let j = Math.min(text.length, i + REMOTE_PART);
       const c = text.charCodeAt(j - 1);
       if (j < text.length && c >= 0xd800 && c <= 0xdbff) j--;   // never split a surrogate pair
-      const r = await exec("sh", ["-c", first ? 'printf %s "$2" > "$1"' : 'printf %s "$2" >> "$1"', "board-part", tmp, text.slice(i, j)], { on });
+      const r = await rexec("sh", ["-c", first ? 'printf %s "$2" > "$1"' : 'printf %s "$2" >> "$1"', "board-part", tmp, text.slice(i, j)], on);
       if (r.code !== 0) throw new Error(r.stderr?.trim() || `can't write on ${on}`);
       i = j;
     }
-    const r = await exec("sh", ["-c", `s=$(${STAT}); [ "$s" = "$3" ] || { rm -f "$2"; echo stale >&2; exit 3; }; mv -f "$2" "$1" && stat -f "%i:%m:%z" "$1"`,
-      "board-commit", path, tmp, stamp], { on });
+    const r = await rexec("sh", ["-c", `s=$(${STAT}); [ "$s" = "$3" ] || { rm -f "$2"; echo stale >&2; exit 3; }; mv -f "$2" "$1" && stat -f "%i:%m:%z" "$1"`,
+      "board-commit", path, tmp, stamp], on);
     if (r.code === 3) throw new Error("stale: the file changed since it was read");
     if (r.code !== 0) throw new Error(r.stderr?.trim() || `can't write ${path} on ${on}`);
     seen.set(key(on, path), { text, stamp: r.stdout.trim() });
     return null;
   } catch (e) {
-    exec("rm", ["-f", tmp], { on }).catch(() => {});
+    rexec("rm", ["-f", tmp], on).catch(() => {});
     throw e;
   }
 }

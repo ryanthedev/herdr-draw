@@ -714,3 +714,34 @@ test("a pane made on another machine (only a path in its props) finds its board 
     expect(ui.view.recent[0]).toBe(`ska:${rf}`);
   } finally { Object.assign(calls, was); calls.remote = []; }
 });
+
+test("another machine's board: commands to it are capped, polls back off when it's slow, and closing stops them", async () => {
+  const dir = mkdtempSync(`${tmpdir()}/herdr-draw-ska-`), rf = `${dir}/slow.excalidraw`;
+  const r = Bun.spawnSync([`${ROOT}cli/drawh`, "add", rf, "rect", "--at", "0,0"]); if (r.exitCode) throw new Error(r.stderr.toString());
+  const was = { props: calls.props, machines: calls.machines, real: calls.real, hook: calls.hook };
+  calls.props = { file: rf, machine: "ska" };
+  calls.machines = [{ name: null, layout: "ready" }, { name: "ska", layout: "ready" }];
+  calls.real = cmd => cmd === "sh";
+  calls.remote = [];
+  try {
+    const ui = await open();
+    await ui.cx.flush();
+    // ska stops answering stamp checks: they fail, and the pane waits longer between tries.
+    let fails = 0;
+    calls.hook = (cmd, args, opts) => (opts?.on && args[2] === "board-stat" ? (fails++, Promise.reject(new Error("16 execs are running"))) : null);
+    await ui.cx.flush(10);
+    expect(ui.view.error).toContain("Can't reach ska");
+    expect(fails).toBeLessThan(5);                                   // 10 ticks, backed off
+    // Every remote command carries a timeout.
+    expect(calls.remote.length).toBeGreaterThan(0);
+    // Back: the error clears on the next good check.
+    calls.hook = null;
+    await ui.cx.flush(60);
+    expect(ui.view.error).toBe(null);
+    // Closing the pane stops its checks.
+    await ui.view.close();
+    const n = calls.remote.length;
+    await ui.cx.flush(5);
+    expect(calls.remote.length).toBe(n);
+  } finally { Object.assign(calls, was); calls.remote = []; }
+});
