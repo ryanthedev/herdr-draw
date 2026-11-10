@@ -134,3 +134,16 @@ test("colors: recent list and ink", () => {
   expect(inkOn("#ffec99")).toBe("#000000");
   expect(inkOn("#1971c2")).toBe("#ffffff");
 });
+
+test("picker grid: a gray column plus one per hue, light to dark, all distinct colors", async () => {
+  const { swatchGrid, hexToHsv } = await import("../core/color.js");
+  const g = swatchGrid(12, 5);
+  expect(g.length).toBe(5);
+  expect(g.every(r => r.length === 13)).toBe(true);
+  expect(new Set(g.flat()).size).toBe(65);
+  for (let c = 0; c < 13; c++) for (let r = 1; r < 5; r++) {
+    const a = hexToHsv(g[r - 1][c]), b = hexToHsv(g[r][c]);
+    expect(a.v * (1 - a.s / 2)).toBeGreaterThanOrEqual(b.v * (1 - b.s / 2) - 1e-9);   // never lighter going down
+  }
+  expect(hexToHsv(g[0][0]).s).toBe(0);
+});

@@ -71,3 +71,15 @@ export function inkOn(hex) {
 }
 
 function clamp01(v) { v = Number(v); return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0; }
+
+// The picker's grid: `cols` hues around the wheel (one gray column first), each from light to dark
+// in `rows` steps. Rows top to bottom: tints (paler), the pure hue, shades (darker).
+export function swatchGrid(cols = 12, rows = 5) {
+  const steps = Array.from({ length: rows }, (_, i) => (rows === 1 ? 0.5 : i / (rows - 1)));   // 0 light → 1 dark
+  const tone = (h, k, gray) => {
+    if (gray) return hsvToHex({ h: 0, s: 0, v: 0.95 - k * 0.85 });
+    // Light half: from a pale tint to full saturation; dark half: full saturation getting darker.
+    return k <= 0.5 ? hsvToHex({ h, s: 0.15 + (k / 0.5) * 0.7, v: 1 }) : hsvToHex({ h, s: 0.85, v: 1 - (k - 0.5) * 1.3 });
+  };
+  return steps.map(k => [tone(0, k, true), ...Array.from({ length: cols }, (_, c) => tone((c * 360) / cols, k, false))]);
+}
