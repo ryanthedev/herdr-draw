@@ -13,7 +13,7 @@ const finite = v => Number.isFinite(v);
 
 // The box around every painted item at scale 1 (scene units): path points (curve controls
 // too), text boxes by estimate, images by their rotated corners. Null when nothing paints.
-export function paintedBox(doc, theme, items = paintScene(doc, { x: 0, y: 0, scale: 1 }, theme)) {
+export function paintedBox(doc, theme, items = paintScene(doc, { x: 0, y: 0, scale: 1 }, theme, { allText: true })) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   const add = (x, y) => { if (!finite(x) || !finite(y)) return; x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); };
   for (const it of items) {
@@ -42,7 +42,7 @@ export function exportScene(doc, theme = LIGHT, { scale = 1, padding = 32, maxPi
   const box = paintedBox(doc, theme) ?? { x: 0, y: 0, w: 0, h: 0 };
   const view = { x: padding - box.x, y: padding - box.y, scale: 1 };
   const width = Math.max(1, Math.ceil(box.w + padding * 2)), height = Math.max(1, Math.ceil(box.h + padding * 2));   // whole units: clean pixels
-  return { items: paintScene(doc, view, theme), width, height, scale: Math.min(scale, maxPixels / Math.max(width, height)), background, files: doc.files };
+  return { items: paintScene(doc, view, theme, { allText: true }), width, height, scale: Math.min(scale, maxPixels / Math.max(width, height)), background, files: doc.files };
 }
 
 // The board's own page (appState.viewBackgroundColor, white if unset), with ink that reads on it:

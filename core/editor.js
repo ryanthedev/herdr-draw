@@ -1203,7 +1203,7 @@ export class Editor {
 
   displayList(theme) {
     const time = this.time();
-    const items = paintScene(this.doc, this.view, theme, { time: time ?? undefined });
+    const items = paintScene(this.doc, this.view, theme, { time: time ?? undefined, clip: this.size ? { w: this.size.w, h: this.size.h } : null });
     if (this.text) { const hide = this.text.id; for (let i = items.length - 1; i >= 0; i--) if (items[i].id === hide && items[i].t === "text") items.splice(i, 1); }
     if (this.erasing.size) for (const it of items) if (this.erasing.has(it.id)) it.opacity = (it.opacity ?? 1) * 0.25;
     if (time != null) return items;   // playback: the board only

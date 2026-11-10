@@ -8,7 +8,7 @@ import { View, div, image, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
 import { props, exec, theme, settings, home, appHome, nextCommand, panes, focused, readTextFile, writeTextFile, fonts, machines, spaces } from "herdr";
 import { Editor, TOOLS, STROKES, FILLS, WIDTHS, STYLES } from "./core/editor.js";
-import { withAlpha } from "./core/render.js";
+import { withAlpha, planBatches } from "./core/render.js";
 import { PRESET_NAMES } from "./core/anim.js";
 import { exportScene, boardTheme, paintedBox } from "./core/export.js";
 import { parseLibrary, mergeLibrary } from "./core/library.js";
@@ -83,31 +83,31 @@ osascript -e 'on run argv' -e 'set f to open for access (POSIX file (item 1 of a
 
 // A display list → native path layers in paint order (consecutive paths with one style become
 // one path), images between them, and the text items (drawn as divs on top).
+// The display list as drawing calls: paths of one style merged into one call wherever that can't
+// change what shows on top (core planBatches). Each call costs Herdr a paint_path; a big board fitted
+// to a pane made ~900 of them per frame, enough to hit the runtime's time limit.
+const styleKey = it => { const color = withAlpha(it.fill ?? it.stroke, it.opacity ?? 1); return it.fill ? `f|${color}` : `s|${color}|${it.width}|${it.dash?.join(",") ?? ""}`; };
 function batchPaths(items) {
-  const layers = [], texts = [];
-  let cur = null;
-  for (const it of items) {
-    if (it.t === "text") { cur = null; texts.push(it); continue; }
-    if (it.t === "image") { cur = null; layers.push({ img: it, n: 1 }); continue; }
-    const color = withAlpha(it.fill ?? it.stroke, it.opacity ?? 1);
-    const key = it.fill ? `f|${color}` : `s|${color}|${it.width}|${it.dash?.join(",") ?? ""}`;
-    if (!cur || cur.key !== key) {
-      let b = it.fill ? PathBuilder.fill() : PathBuilder.stroke(it.width);
-      if (it.dash) b = b.dash_array(it.dash);
-      cur = { key, color, b, n: 0 }; layers.push(cur);
+  const plan = planBatches(items, styleKey), layers = [];
+  for (const l of plan.layers) {
+    if (l.img) { layers.push({ img: l.img, n: 1 }); continue; }
+    const first = l.items[0], fill = !!first.fill;
+    let b = fill ? PathBuilder.fill() : PathBuilder.stroke(first.width);
+    if (first.dash) b = b.dash_array(first.dash);
+    for (const it of l.items) {
+      let started = false;
+      for (const c of it.cmds) {
+        if (c[0] === "M" && fill && started) b.close();   // each filled shape closes before the next starts
+        started = true;
+        if (c[0] === "M") b.move_to(c[1], c[2]);
+        else if (c[0] === "L") b.line_to(c[1], c[2]);
+        else if (c[0] === "Q") b.curve_to(c[1], c[2], c[3], c[4]);
+      }
+      if (fill) b.close();
     }
-    let started = false;
-    for (const c of it.cmds) {
-      if (c[0] === "M" && it.fill && started) cur.b.close();   // each filled shape closes before the next starts
-      started = true;
-      if (c[0] === "M") cur.b.move_to(c[1], c[2]);
-      else if (c[0] === "L") cur.b.line_to(c[1], c[2]);
-      else if (c[0] === "Q") cur.b.curve_to(c[1], c[2], c[3], c[4]);
-    }
-    if (it.fill) cur.b.close();
-    cur.n++;
+    layers.push({ key: l.key, color: withAlpha(first.fill ?? first.stroke, first.opacity ?? 1), b, n: l.items.length });
   }
-  return { layers, texts };
+  return { layers, texts: plan.texts };
 }
 
 // A machine this Herdr reaches by that name (a space's `machine`), or null: this computer. A board
@@ -189,6 +189,7 @@ export default class Draw extends View {
         else if (c === "write") this.ed.beginText(null, this.ed.toWorld({ x: this.size.w / 3, y: this.size.h / 3 }));   // start typing (no mouse needed)
         else if (c === "help") { this.help = !this.help; if (this.help) this.loadKeys(cx); }
         else if (c === "demo") { if (this.board) this.endDemo(); else this.startDemo(); }
+        else if (c === "perf") { this.writePerf(); continue; }
         else if (c === "open") { if (this.picker) this.closePicker(cx); else this.openPicker(cx); }
         else if (c === "focus") { cx.timer.after(60, () => { if (panes().find(q => q.focused)?.mod === MOD) this.handle.focus(); }); continue; }
         this.after(cx);
@@ -610,6 +611,24 @@ export default class Draw extends View {
   // ── paint ──────────────────────────────────────────────────────────────
 
   render(cx) {
+    const t0 = Date.now(), view = this.renderView(cx);
+    // How long redraws take, in Herdr's own runtime: `herdr-app do herdr-draw.perf` writes the last ones.
+    (this.perf ??= []).push(Date.now() - t0);
+    if (this.perf.length > 60) this.perf.shift();
+    return view;
+  }
+
+  // <cache>/perf.json: this board's size and its last redraw times (ms), for finding slow boards.
+  writePerf() {
+    const ms = [...(this.perf ?? [])], sorted = [...ms].sort((a, b) => a - b);
+    const dl = this.ed.displayList(this.palette()), b = batchPaths(dl);
+    cx_free_write(CACHE(), "perf.json", JSON.stringify({ at: new Date().toISOString(), file: this.file, machine: this.machine,
+      elements: this.ed.doc.live().length, zoom: this.ed.view.scale, items: dl.length, drawCalls: b.layers.length, texts: b.texts.length,
+      cmds: dl.reduce((n, i) => n + (i.cmds?.length ?? 0), 0), renders: ms.length, last: ms.slice(-10),
+      median: sorted[sorted.length >> 1] ?? null, max: sorted[sorted.length - 1] ?? null }));
+  }
+
+  renderView(cx) {
     const t = theme();
     this.ensureImages(cx);
     const side = panelLayout({ ...panelState(), open: this.sidebar }, this.size.w + this.sideW);

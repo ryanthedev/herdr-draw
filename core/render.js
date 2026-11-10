@@ -121,6 +121,11 @@ function smooth(cmds, pts) {
 }
 
 
+// Below this zoom shapes and lines are drawn clean, and text smaller than TEXT_MIN px is left out
+// (a big board fitted to a pane: hundreds of 2 px labels cost a lot to lay out and say nothing).
+export const CLEAN_BELOW = 0.3;
+export const TEXT_MIN = 3;
+
 export const project = view => (x, y) => [(x + view.x) * view.scale, (y + view.y) * view.scale];
 
 // Paint one element into `out`. `P` maps scene → screen.
@@ -136,7 +141,8 @@ export function paintElement(doc, el, P, view, theme, out, opts = {}) {
     const b = bbox(el), cx = b.x + b.w / 2, cy = b.y + b.h / 2;
     Q = (x, y) => P(cx + (x - cx) * a.scale + a.dx, cy + (y - cy) * a.scale + a.dy);
   }
-  const s = view.scale, r = rng(el.seed), rough = (el.roughness ?? 1) * Math.min(1.5, s);
+  // Zoomed far out the hand-drawn wobble is under a pixel: draw clean (a quarter of the commands).
+  const s = view.scale, r = rng(el.seed), rough = s < CLEAN_BELOW ? 0 : (el.roughness ?? 1) * Math.min(1.5, s);
   const stroke = ink(el.strokeColor, theme), fill = ink(el.backgroundColor, theme);
   const width = Math.max(0.5, el.strokeWidth * s), dash = el.strokeStyle === "dashed" ? [8 * s, 6 * s] : el.strokeStyle === "dotted" ? [1.5 * s, 5 * s] : null;
 
@@ -226,10 +232,65 @@ export function paintElement(doc, el, P, view, theme, out, opts = {}) {
 
 // The whole board. `opts.time` (ms) plays the timeline; omit it for the editing view.
 export function paintScene(doc, view, theme, opts = {}) {
-  const out = [], P = project(view);
-  for (const el of doc.visible()) paintElement(doc, el, P, view, theme, out, opts);
-  return out;
+  const out = [], P = project(view), seen = clipTest(doc, view, opts);
+  for (const el of doc.visible()) if (!seen || seen(el)) paintElement(doc, el, P, view, theme, out, opts);
+  return opts.allText ? out : out.filter(it => it.t !== "text" || !(it.size < TEXT_MIN));
 }
+
+// Paths grouped into as few drawing calls as possible (each group is one path of one style).
+// The display list is in paint order; a path may join an earlier group of its style only if
+// nothing drawn after that group overlaps it, so what shows on top never changes. `keyOf(it)`
+// names a style; `bboxOf(it)` its screen box. Text and images end no group (text draws above
+// every path anyway; an image is its own layer). Returns { layers: [{ key, items, img? }], texts }.
+export function planBatches(items, keyOf, { lookback = 48 } = {}) {
+  const layers = [], texts = [];
+  for (const it of items) {
+    if (it.t === "text") { texts.push(it); continue; }
+    if (it.t === "image") { const b = imgBox(it); layers.push({ img: it, items: [], box: b, boxes: [b] }); continue; }
+    if (it.t !== "path") continue;
+    const key = keyOf(it), box = cmdsBox(it.cmds, (it.width ?? 0) / 2 + 1);
+    let into = null;
+    for (let i = layers.length - 1, n = 0; i >= 0 && n < lookback; i--, n++) {
+      const l = layers[i];
+      if (!l.img && l.key === key) { into = l; break; }
+      // Something above the candidates covers this spot: its union box first (cheap), then its pieces.
+      if (overlaps(l.box, box) && l.boxes.some(b => overlaps(b, box))) break;
+    }
+    if (!into) { into = { key, items: [], box: null, boxes: [] }; layers.push(into); }
+    into.items.push(it);
+    into.boxes.push(box);
+    into.box = union(into.box, box);
+  }
+  return { layers, texts };
+}
+const imgBox = it => ({ x0: Math.min(it.x, it.x + it.w), y0: Math.min(it.y, it.y + it.h), x1: Math.max(it.x, it.x + it.w), y1: Math.max(it.y, it.y + it.h) });
+function cmdsBox(cmds, pad) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const c of cmds) for (let i = 1; i + 1 < c.length; i += 2) {
+    const x = c[i], y = c[i + 1];
+    if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+  }
+  return { x0: x0 - pad, y0: y0 - pad, x1: x1 + pad, y1: y1 + pad };   // a stroke's width spills past its points
+}
+const overlaps = (a, b) => !!a && a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+const union = (a, b) => (a ? { x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0), x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1) } : b);
 
 // Helpers for overlays (selection, handles, cursors).
 export function rectCmds(x, y, w, h) { return [["M", x, y], ["L", x + w, y], ["L", x + w, y + h], ["L", x, y + h], ["L", x, y]]; }
+
+// `opts.clip` ({ w, h }, screen px): leave out what can't reach the screen. Generous on purpose:
+// a rotated shape's corners pass its box (half its size each way), a label rides its container, and
+// arrows bound to shapes are routed when drawn, so they're always kept. Never while the timeline
+// plays (animations move things). Null: draw everything.
+function clipTest(doc, view, opts) {
+  const c = opts.clip;
+  if (!c || opts.time !== undefined) return null;
+  const s = view.scale, x0 = -view.x, y0 = -view.y, x1 = x0 + c.w / s, y1 = y0 + c.h / s, m = 40 / s;
+  return el => {
+    let host = el;
+    if (el.type === "text" && el.containerId) { host = doc.get(el.containerId); if (!host) return true; }
+    if (isLinear(host) && (host.startBinding || host.endBinding)) return true;
+    const b = bbox(host), r = (host.angle ? Math.max(b.w, b.h) / 2 : 0) + m;
+    return b.x - r < x1 && b.x + b.w + r > x0 && b.y - r < y1 && b.y + b.h + r > y0;
+  };
+}
