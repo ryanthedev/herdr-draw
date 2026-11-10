@@ -147,6 +147,8 @@ export function paintElement(doc, el, P, view, theme, out, opts = {}) {
   const width = Math.max(0.5, el.strokeWidth * s), dash = el.strokeStyle === "dashed" ? [8 * s, 6 * s] : el.strokeStyle === "dotted" ? [1.5 * s, 5 * s] : null;
 
   if (el.type === "text") {
+    // Too small to read in the pane: skip it before wrapping it (and an arrow label's background patch with it).
+    if (!opts.allText && el.fontSize * s * (a?.scale ?? 1) < TEXT_MIN) return;
     if (isLabel(el)) {
       const box = doc.get(el.containerId); if (!box) return;
       let b = bbox(box);
@@ -289,8 +291,11 @@ function clipTest(doc, view, opts) {
   return el => {
     let host = el;
     if (el.type === "text" && el.containerId) { host = doc.get(el.containerId); if (!host) return true; }
-    if (isLinear(host) && (host.startBinding || host.endBinding)) return true;
-    const b = bbox(host), r = (host.angle ? Math.max(b.w, b.h) / 2 : 0) + m;
+    // Lines and arrows (routes, labels along them), frames (their names run past them) and images
+    // are few and cheap: always drawn.
+    if (isLinear(host) || host.type === "frame" || host.type === "image") return true;
+    // Half the shape's size each way: room for a rotated corner or a label taller than its shape.
+    const b = bbox(host), r = Math.max(b.w, b.h) / 2 + m;
     return b.x - r < x1 && b.x + b.w + r > x0 && b.y - r < y1 && b.y + b.h + r > y0;
   };
 }

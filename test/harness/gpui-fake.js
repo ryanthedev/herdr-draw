@@ -109,6 +109,8 @@ export function installFakes({ file, home }) {
     exec: async (cmd, args, opts) => {
       calls.exec.push([cmd, ...args]);
       if (opts?.on) (calls.remote ??= []).push([opts.on, cmd, ...args]);
+      const hooked = calls.hook?.(cmd, args, opts);
+      if (hooked) return hooked;
       if (calls.real?.(cmd, args)) {
         const r = Bun.spawnSync([cmd, ...args], { env: process.env });
         // Herdr's exec caps output at 8 MiB (herdr.d.ts): a read that leans on more must fail here too.

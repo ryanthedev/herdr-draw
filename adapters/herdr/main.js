@@ -117,6 +117,19 @@ const remoteOn = m => (m && (machines?.() ?? []).some(x => x.name === m) ? m : n
 // The machine of the space with the keyboard (null: this computer).
 const focusedMachine = () => { const f = focused?.(); return f ? ((spaces?.() ?? []).find(s => s.id === f.space)?.machine ?? null) : null; };
 
+// The machine that has `file` when this one doesn't: a board pane in a space on another machine, made
+// there (drawh open names only a path), is drawn by this Herdr too. null: here, or nowhere we can reach.
+async function locateBoard(file) {
+  const here = await exec("test", ["-e", file]).catch(() => null);
+  if (!here || here.code === 0) return null;
+  for (const m of machines?.() ?? []) {
+    if (!m.name || m.layout === "unavailable") continue;
+    const r = await exec("test", ["-f", file], { on: m.name }).catch(() => null);
+    if (r?.code === 0) return m.name;
+  }
+  return null;
+}
+
 // Write a small file in `dir` atomically (temp + mv), fire and forget.
 function cx_free_write(dir, name, text) {
   exec("sh", ["-c", 'mkdir -p "$1" && printf %s "$3" > "$1/.$2.$$" && mv -f "$1/.$2.$$" "$1/$2"', "write-small", dir, name, text]);
@@ -207,6 +220,8 @@ export default class Draw extends View {
 
   startStore(cx) {
     const store = this.store = new FileStore(this.file, this.ed, { on: this.machine,
+      locate: this.machine ? null : file => locateBoard(file),
+      onLocated: m => { if (this.store !== store) return; this.machine = m; this.remember(boardRef(this.file, m)); },
       onError: m => { if (this.store === store) this.error = m; },
       onExternal: n => { if (this.store === store) { this.error = null; this.flash = `${n} change${n === 1 ? "" : "s"} from the file`; } },
     });

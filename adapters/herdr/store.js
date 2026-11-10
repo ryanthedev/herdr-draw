@@ -11,14 +11,19 @@ const POLL_MS = 1500;   // a board on another machine: how often to look for oth
 
 export class FileStore {
   // `on`: the machine the file lives on (a space's `machine`), null for this one.
-  constructor(file, editor, { on = null, onError = () => {}, onExternal = () => {} } = {}) {
-    this.on = on; this.file = file; this.ed = editor; this.onError = onError; this.onExternal = onExternal;
+  // `locate(file)`: when `on` isn't given, finds the machine that has the file (null: this one).
+  constructor(file, editor, { on = null, locate = null, onLocated = () => {}, onError = () => {}, onExternal = () => {} } = {}) {
+    this.on = on; this.locate = locate; this.onLocated = onLocated; this.file = file; this.ed = editor; this.onError = onError; this.onExternal = onExternal;
     this.disk = null;          // the file's text as last read or written
     this.timer = null; this.saving = false; this.again = false; this.pending = null;
   }
 
   // `cx` must outlive this call: pass the async cx from cx.spawn.
   async start(cx) {
+    // A pane made on another machine (drawh open there) names only a path; this Herdr draws it too.
+    if (!this.on && this.locate) {
+      try { const m = await this.locate(this.file); if (m) { this.on = m; this.onLocated(m); } } catch {}
+    }
     try {
       const text = await this.read();
       if (text !== null) { this.ed.load(JSON.parse(text)); this.disk = text; }

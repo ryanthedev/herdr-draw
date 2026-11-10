@@ -694,3 +694,23 @@ test("the same pane drawn by that machine's own Herdr (which doesn't list itself
     expect(ui.view.machine).toBe(null);
   } finally { calls.props = was; }
 });
+
+test("a pane made on another machine (only a path in its props) finds its board there", async () => {
+  const dir = mkdtempSync(`${tmpdir()}/herdr-draw-ska-`), rf = `${dir}/made-there.excalidraw`;
+  const r = Bun.spawnSync([`${ROOT}cli/drawh`, "add", rf, "rect", "--at", "0,0", "--label", "There"]); if (r.exitCode) throw new Error(r.stderr.toString());
+  const was = { props: calls.props, machines: calls.machines, real: calls.real, hook: calls.hook };
+  calls.props = { file: rf };                                            // what drawh open on ska writes
+  calls.machines = [{ name: null, layout: "ready" }, { name: "ska", layout: "ready" }];
+  calls.real = cmd => ["sh"].includes(cmd);
+  // The file is "there", not here: `test` answers per machine.
+  calls.hook = (cmd, args, opts) => cmd === "test" ? { stdout: "", stderr: "", code: opts?.on === "ska" ? 0 : 1 } : null;
+  calls.remote = [];
+  try {
+    const ui = await open();
+    await ui.cx.flush();
+    expect(ui.view.machine).toBe("ska");
+    expect(ui.view.ed.doc.live().some(e => e.text === "There")).toBe(true);
+    expect(calls.remote.some(c => c[0] === "ska" && c[4] === "board-read")).toBe(true);
+    expect(ui.view.recent[0]).toBe(`ska:${rf}`);
+  } finally { Object.assign(calls, was); calls.remote = []; }
+});
