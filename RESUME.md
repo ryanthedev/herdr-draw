@@ -94,6 +94,16 @@ Plan (advisor-reviewed), one commit per phase: (1) core model + color math ✓ (
   press drags the window; a pop-out on a newer build than its board pane finds no editor (say so, don't draw blank).
   Windows close on a layout switch; `keep: true` with a `key` reopens them.
 
+## Big boards and Herdr's render limit (2026-11-09)
+
+- Herdr runs mods on QuickJS and stops a redraw that runs too long: "This view could not be re-rendered; showing the
+  last version that worked", detail "interrupted at paintPath … canvas … render". Hit by a 1,065-element board at fit
+  zoom (878 paint_path calls, 8,540 commands). Intermittent near the limit; the limit itself is unknown.
+- Fixed in 470f119 (core/render.js): planBatches (z-safe merging), CLEAN_BELOW 0.3, TEXT_MIN 3 px (pane only),
+  clipTest (off-screen). Live on ska after: 215 calls, 2,292 commands, redraws 1–31 ms.
+- `herdr-app do herdr-draw.perf` → `~/.cache/herdr-draw/perf.json` (last redraw ms, calls, commands) on that machine.
+- Boards on another machine: done (9836ccc). ska tracks origin/main: `ssh ska 'cd ~/repos/herdr-draw && git pull --ff-only && sh scripts/install.sh'`.
+
 ## How to verify in real Herdr (never the person's window)
 
 Isolated home `~/.cache/hdt` already exists (layout `drawtest` shows only the board, file `~/.cache/hdt/t.excalidraw`):
