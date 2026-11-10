@@ -16,6 +16,8 @@ core/            pure JS, no imports from Herdr, the DOM, Node or the network
   panel.js       the side panel's layout (order, folds, tabs, width, palette); applyPanel(state, op) is the only change
   color.js       hex / RGB / HSV for the color picker, recent colors
   library.js     .excalidrawlib read (v1, v2) / write (v2); Editor.insertElements is the one insert path (paste, library)
+  lint.js        overlaps(elements): what collides as drawn (label words wider than their shape, shapes, edges
+                 through shapes, edge labels, frame titles); Mermaid layout and `drawh check` use it
   anim.js        timeline presets / keyframes → per-element state at time t
   editor.js      tools, gestures, selection, undo, layers, align, clipboard, commands
   shortcuts.js   every key for the ? overlay (tested against Editor.key); demo.js: the animated demo board
@@ -40,7 +42,7 @@ Herdr-draw data lives where Excalidraw keeps foreign data: `customData.{layer,z,
 
 ## Dev loop
 
-- `bun test` (229 tests). `drawh mermaid` runs core/mermaid.js through node (or bun), so agents and the pane lay out alike. Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
+- `bun test` (248 tests). `drawh mermaid` runs core/mermaid.js through node (or bun), so agents and the pane lay out alike. Snapshots land in `test/out/*.png` (headless Chromium from Playwright's cache).
 - `scripts/dev-sync.sh` builds `build/herdr-draw` (adapter + core + svg + drawh) and installs a **copy** into `~/.config/herdr-app/mods/herdr-draw`.
 - `scripts/install.sh` installs **HEAD** into the person's Herdr (ignores `HERDR_APP_HOME`): run it after commits the person
   should test. If `.git/hooks/post-commit` exists (`scripts/install-hook.sh`), every commit to `main` installs itself. ⌘⇧B opens a scratch board. Their notes: `FEEDBACK.md`.
@@ -91,6 +93,13 @@ sent only to that window's id; quit it by its pid when done.
 - `"transparent"` is not a GPUI color: use `#00000000`.
 - Coordinates: GPUI event positions are zoomed px; divide by `settings().zoom`. Paths and `left/top` use the same zoom-1 units.
 - Text is drawn as divs above all paths (no text-in-path API), so text always paints over shapes.
+- A labeled shape is never narrower than its label's longest word (`labelHostWidth`, core/text.js): the pane's
+  `fitHost` widens it about its center when text is typed, resizing stops there, and drawh widens what a write touched.
+  `wrapLines` still leaves a word up to 1.5× the line whole (spills) and breaks longer ones between letters, so
+  boards from elsewhere can still show either; `drawh check` reports both.
+- Mermaid layout (core/mermaid.js) doubles ranks: nodes on even ranks, every edge through one "lane" per rank between
+  its ends (label-sized where its label goes), so labels, skipped ranks and A→B/B→A get room. Elbows route themselves
+  and ignore lanes: an elbow that `overlaps()` flags is redone as a curve through its lanes.
 - Text widths come from glyph tables in `core/text.js` (SF Pro as the pane spaces it, Chalkboard SE, mono 0.6), made by
   `scripts/glyph-widths.mjs`. Never use a flat chars × factor estimate elsewhere: call `textWidth`/`lineWidth`.
 - Rotation: shapes and text keep `angle`; lines, arrows and pen strokes bake it into their points. GPUI can't rotate text,

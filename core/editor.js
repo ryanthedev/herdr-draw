@@ -15,7 +15,7 @@ import {
 } from "./geometry.js";
 import { paintScene, paintElement, project, rectCmds, withAlpha, outlinePoints } from "./render.js";
 import { PRESETS, timelineEnd } from "./anim.js";
-import { labelHostHeight } from "./text.js";
+import { labelHostHeight, labelHostWidth } from "./text.js";
 import { isMermaid, mermaidToElements } from "./mermaid.js";
 import { itemFromElements } from "./library.js";
 
@@ -472,7 +472,7 @@ export class Editor {
     for (const [, o] of g.orig) {
       const c = clone(o); mapIntoBox(c, o, b, to);
       // A shape never gets shorter than its wrapped label (it grows as it narrows).
-      const l = isShape(c) && this.doc.labelOf(c); if (l) this.fitHost(c, l);
+      const l = isShape(c) && this.doc.labelOf(c); if (l) this.fitHost(c, l, "left");
       els.push(c);
     }
     this.livePut(...els);
@@ -519,6 +519,9 @@ export class Editor {
       if (nw / r > nh) { const h = nw / r; if (d.includes("n")) y0 = y1 - h; else y1 = y0 + h; } else { const ww = nh * r; if (d.includes("w")) x0 = x1 - ww; else x1 = x0 + ww; }
     }
     const nb = { x: Math.min(x0, x1), y: Math.min(y0, y1), w: Math.max(1, Math.abs(x1 - x0)), h: Math.max(1, Math.abs(y1 - y0)) };
+    // Never narrower than the label's longest word: the dragged side stops there.
+    const lab = isShape(orig) && this.doc.labelOf(orig), minW = lab?.text ? labelHostWidth(lab, orig.type) : 0;
+    if (nb.w < minW) { if (d.includes("w") && x0 <= x1) nb.x = x1 - minW; else if (d.includes("e") && x1 < x0) nb.x = x0 - minW; nb.w = minW; }
     // The new box's center, from the old frame back to the scene.
     const c = rotate({ x: nb.x + nb.w / 2, y: nb.y + nb.h / 2 }, center(b), a);
     const el = clone(orig);
@@ -542,9 +545,12 @@ export class Editor {
     this.transact(tx => { for (const e of els) { tx.get(e.id).angle = 0; const l = isShape(e) && this.doc.labelOf(e); if (l) tx.get(l.id).angle = 0; } });
   }
 
-  // Grow a shape downward until its label fits (Excalidraw does the same).
-  fitHost(host, label) {
+  // Grow a shape until its label fits: wide enough for its longest word (from its center, or
+  // keeping its left edge when keep is "left"), then down for its wrapped lines (as Excalidraw does).
+  fitHost(host, label, keep = "center") {
     if (!label?.text) return;
+    const minW = labelHostWidth(label, host.type), w = Math.abs(host.width);
+    if (w < minW) { const s = Math.sign(host.width) || 1; if (keep === "center") host.x -= s * (minW - w) / 2; host.width = s * minW; }
     const need = labelHostHeight(label, host);
     if (Math.abs(host.height) < need) host.height = need;
   }

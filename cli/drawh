@@ -2,7 +2,8 @@
 """drawh: drive the Herdr whiteboard (herdr-draw) from a shell. Built for agents.
 
 The board is an .excalidraw file; the pane watches it and redraws on every change.
-Coordinates are scene pixels, x right, y down. Shapes are 140x80 unless --w/--h.
+Coordinates are scene pixels, x right, y down. Shapes are 140x80 unless --w/--h, and never narrower
+than their label's longest word (widened about their center). Writes warn about overlaps they cause.
 Needs node (or bun) on PATH: every write of a board with labels or arrows runs the board's own core
 (arrow routes, label boxes) so the file opens right without the pane, and in excalidraw.com (~0.2 s).
 
@@ -36,6 +37,9 @@ Needs node (or bun) on PATH: every write of a board with labels or arrows runs t
   drawh clear FILE                              delete everything
   drawh grid FILE LABEL... [--cols N] [--kind rect] [--gap 60]
                                                 lay out labeled shapes in a grid; prints ids
+  drawh check FILE [--json]                     what overlaps as drawn: label lines wider than their shape, edges
+                                                through shapes, edge labels on shapes or each other, edges on top of
+                                                each other; exits 1 if any (every write warns about its own)
   drawh layers FILE                             list layers (bottom first)
   drawh layer FILE NAME [--hide|--show|--lock|--unlock|--opacity N]
                                                 create or change a layer; new elements go to it with --layer NAME
@@ -191,6 +195,15 @@ def core_dir():
     die("can't find core/ next to drawh")
 
 
+def label_min_width(labels, kind, size=20):
+    """The width a `kind` shape needs so the longest word of each label fits whole (core/text.js labelHostWidth)."""
+    url = json.dumps("file://" + os.path.join(core_dir(), "text.js"))
+    script = ("import { labelHostWidth } from %s; let s = ''; process.stdin.on('data', d => s += d); process.stdin.on('end', () => {"
+              " const { labels, kind, size } = JSON.parse(s);"
+              " process.stdout.write(String(Math.max(0, ...labels.map(t => labelHostWidth({ text: t.replace(/\\\\n/g, '\\n'), fontSize: size, fontFamily: 2 }, kind))))); });") % url
+    return float(run_js(script, json.dumps({"labels": labels, "kind": kind, "size": size})))
+
+
 def svg_module():
     here = os.path.dirname(os.path.realpath(__file__))
     for p in (os.path.join(here, "svg.js"), os.path.join(here, "..", "adapters", "svg", "svg.js")):
@@ -307,20 +320,29 @@ def settle_for_file(scene):
     # edited: an arrow excalidraw.com aimed off-center stays as it is until someone moves it or its shapes.
     touched = [e["id"] for e in scene["elements"] if LOADED.get(e.get("id")) != (e.get("version"), e.get("versionNonce"))]
     url = lambda m: json.dumps("file://" + os.path.join(core_dir(), m))
-    script = ("import { Doc } from %s; import { settle, fileScene } from %s; import { touch, isShape } from %s; import { labelHostHeight } from %s;"
+    script = ("import { Doc } from %s; import { settle, fileScene } from %s; import { touch, isShape } from %s; import { labelHostHeight, labelHostWidth } from %s; import { overlaps } from %s;"
               "let s = ''; process.stdin.on('data', d => s += d); process.stdin.on('end', () => {"
               " const { scene, touched } = JSON.parse(s), doc = new Doc(scene), out = {}, t = new Set(touched);"
-              # shapes grow down to fit their labels (the pane's fitHost), before arrows are routed to them
+              # shapes grow to fit their labels (the pane's fitHost): wide enough for the longest word (about their
+              # center), then down for the wrapped lines, before arrows are routed to them
               " for (const el of doc.live()) { const l = isShape(el) && doc.labelOf(el); if (!l || !l.text || !(t.has(el.id) || t.has(l.id))) continue;"
-              "  const need = labelHostHeight(l, el); if (Math.abs(el.height) >= need) continue;"
-              "  const c = structuredClone(el); c.height = need; touch(c); doc.apply({ elements: [c] }, { force: true }); out[c.id] = c; t.add(c.id); }"
+              "  const minW = labelHostWidth(l, el.type), c = structuredClone(el), w = Math.abs(c.width);"
+              "  if (w < minW) { const sg = Math.sign(c.width) || 1; c.x -= sg * (minW - w) / 2; c.width = sg * minW; }"
+              "  c.height = Math.max(Math.abs(c.height), labelHostHeight(l, c)) * (Math.sign(c.height) || 1);"
+              "  if (c.width === el.width && c.height === el.height) continue;"
+              "  touch(c); doc.apply({ elements: [c] }, { force: true }); out[c.id] = c; t.add(c.id); }"
               " for (const el of doc.live()) if ((el.elbowed || el.startBinding || el.endBinding) && (t.has(el.id) || t.has(el.startBinding?.elementId) || t.has(el.endBinding?.elementId))) { const c = structuredClone(el);"
               "  if (settle(doc, c)) { touch(c); doc.apply({ elements: [c] }, { force: true }); out[c.id] = c; } }"
               " const before = new Map(doc.toScene().elements.map(e => [e.id, e]));"
               " for (const e of fileScene(doc, doc.toScene()).elements) if (e !== before.get(e.id)) out[e.id] = e;"
-              " process.stdout.write(JSON.stringify(out)); });") % (url("doc.js"), url("geometry.js"), url("model.js"), url("text.js"))
+              # overlaps this run made or touched, for a warning (drawh check lists them all)
+              " for (const id of Object.keys(out)) t.add(id); for (const l of doc.live()) if (l.containerId && t.has(l.id)) t.add(l.containerId);"
+              " const problems = overlaps(doc.toScene().elements).filter(p => p.ids.some(id => t.has(id))).map(p => p.msg);"
+              " process.stdout.write(JSON.stringify({ out, problems })); });") % (url("doc.js"), url("geometry.js"), url("model.js"), url("text.js"), url("lint.js"))
     done = json.loads(run_js(script, json.dumps({"scene": scene, "touched": touched})))
-    scene["elements"] = [done.get(e["id"], e) for e in scene["elements"]]
+    scene["elements"] = [done["out"].get(e["id"], e) for e in scene["elements"]]
+    for msg in done["problems"]:
+        sys.stderr.write(f"drawh: overlap: {msg}\n")
 
 
 def save(path, scene):
@@ -444,6 +466,7 @@ def main():
     g.add_argument("--cols", type=int, default=3); g.add_argument("--kind", default="rect"); g.add_argument("--gap", type=float, default=60)
     g.add_argument("--at", default="0,0"); g.add_argument("--w", type=float, default=160); g.add_argument("--h", type=float, default=80)
     sub.add_parser("sel"); sub.add_parser("fit"); sub.add_parser("play")
+    ck = sub.add_parser("check"); ck.add_argument("file"); ck.add_argument("--json", action="store_true")
     ly = sub.add_parser("layers"); ly.add_argument("file")
     l1 = sub.add_parser("layer"); l1.add_argument("file"); l1.add_argument("name")
     for f in ("--hide", "--show", "--lock", "--unlock"): l1.add_argument(f, action="store_true")
@@ -531,6 +554,20 @@ def main():
                     die("sips couldn't make the PNG: " + (r.stderr.strip() or str(r.returncode)))
         print(out)
         return
+
+    if args.cmd == "check":
+        url = lambda m: json.dumps("file://" + os.path.join(core_dir(), m))
+        script = ("import { overlaps } from %s; let s = ''; process.stdin.on('data', d => s += d);"
+                  "process.stdin.on('end', () => process.stdout.write(JSON.stringify(overlaps(JSON.parse(s).elements))));") % url("lint.js")
+        problems = json.loads(run_js(script, json.dumps(scene)))
+        if args.json:
+            print(json.dumps(problems, indent=1))
+        else:
+            for p_ in problems:
+                print(p_["msg"])
+            if not problems:
+                print("no overlaps")
+        sys.exit(1 if problems else 0)
 
     if args.cmd == "ls":
         rows = [describe(scene, e) for e in live(scene) if not (e["type"] == "text" and e.get("containerId"))]
@@ -730,9 +767,11 @@ def main():
             el["isDeleted"] = True; touch(el)
     elif args.cmd == "grid":
         x0, y0 = pair(args.at, "--at"); ids = []
+        kind = KINDS.get(args.kind, "rectangle")
+        args.w = max(args.w, label_min_width(args.labels, kind))   # one width for every cell: the longest word fits whole
         for i, lab in enumerate(args.labels):
             r_, c_ = divmod(i, args.cols)
-            el = base(KINDS.get(args.kind, "rectangle"), x=x0 + c_ * (args.w + args.gap), y=y0 + r_ * (args.h + args.gap),
+            el = base(kind, x=x0 + c_ * (args.w + args.gap), y=y0 + r_ * (args.h + args.gap),
                       width=args.w, height=args.h)
             place(scene, el, args.layer); set_label(scene, el, lab); ids.append(el["id"])
         out = "\n".join(ids)

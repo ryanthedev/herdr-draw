@@ -76,6 +76,16 @@ export function labelLines(label, host) {
   return wrapLines(label.text, usable, label.fontSize, label.fontFamily);
 }
 
+// The width a shape needs so no word of its label has to break or spill: the widest word
+// (or line, when nothing can wrap) plus padding, over the share of the width a label may use.
+// A little slack, since widths are estimates. Wider shapes keep their width.
+export function labelHostWidth(label, type = "rectangle") {
+  if (!label?.text || !(label.fontSize > 0)) return 0;
+  const words = String(label.text).split(/[ \n]+/).filter(Boolean);
+  const widest = Math.max(0, ...words.map(w => textWidth(w, label.fontSize, label.fontFamily)));
+  return Math.ceil((widest + LABEL_PAD * 2) / labelWidthFactor(type) + 4);
+}
+
 // The height a shape needs so its wrapped label fits inside.
 export function labelHostHeight(label, host) {
   const lines = labelLines(label, host).length;
