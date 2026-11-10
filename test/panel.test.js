@@ -147,3 +147,46 @@ test("picker grid: a gray column plus one per hue, light to dark, all distinct c
   }
   expect(hexToHsv(g[0][0]).s).toBe(0);
 });
+
+test("color row: saved colors after the fixed ones, deduped; a custom color still shows", async () => {
+  const { colorRow } = await import("../core/color.js");
+  const fixed = ["#1e1e1e", "#e03131"];
+  const r = colorRow(fixed, ["#E03131", "#abc", "#aabbcc", "junk"], "#AABBCC");
+  expect(r.fixed).toEqual([{ color: "#1e1e1e", active: false }, { color: "#e03131", active: false }]);
+  expect(r.saved).toEqual([{ color: "#aabbcc", active: true }]);           // #E03131 is fixed already; #abc = #aabbcc
+  expect(r.custom).toBe(null);
+  expect(colorRow(fixed, [], "#E03131").fixed[1].active).toBe(true);
+  expect(colorRow(fixed, [], "#123456").custom).toBe("#123456");
+  expect(colorRow(fixed, [], "transparent").custom).toBe("transparent");
+  expect(colorRow(fixed, [], undefined).custom).toBe(null);
+});
+
+test("picker model: grid marks the current color; recent drops none for strokes; save only what isn't one click away", async () => {
+  const { pickerModel, swatchGrid } = await import("../core/color.js");
+  const g = swatchGrid(12, 5), pick = g[2][4];
+  const m = pickerModel({ kind: "stroke", fixed: ["#1e1e1e"], saved: ["#00ff00"], recent: ["transparent", pick.toUpperCase(), "#00ff00"], current: pick });
+  expect(m.grid.length).toBe(5);
+  expect(m.grid.flat().filter(c => c.active)).toEqual([{ color: pick, active: true }]);
+  expect(m.recent.map(c => c.color)).toEqual([pick, "#00ff00"]);
+  expect(m.recent[0].active).toBe(true);
+  expect(m.canSave).toBe(true);
+  expect(m.none).toBe(null);
+  expect(m.hex).toBe(pick);
+  expect(pickerModel({ kind: "stroke", fixed: ["#1e1e1e"], saved: ["#00ff00"], recent: [], current: "#00FF00" }).canSave).toBe(false);
+  expect(pickerModel({ kind: "stroke", fixed: ["#1e1e1e"], saved: [], recent: [], current: "#1e1e1e" }).canSave).toBe(false);
+  const f = pickerModel({ kind: "fill", fixed: [], saved: [], recent: ["transparent"], current: "transparent" });
+  expect(f.none).toEqual({ active: true });
+  expect(f.recent.map(c => c.color)).toEqual(["transparent"]);
+  expect(f.canSave).toBe(false);
+  expect(f.hex).toBe("");
+});
+
+test("picker hex field: colors parse, anything else is a short message", async () => {
+  const { parseColorInput } = await import("../core/color.js");
+  expect(parseColorInput(" 1971C2 ")).toEqual({ color: "#1971c2" });
+  expect(parseColorInput("#f0a")).toEqual({ color: "#ff00aa" });
+  const bad = parseColorInput("purple-ish blue");
+  expect(bad.color).toBeUndefined();
+  expect(bad.error).toContain("isn't a color");
+  expect(bad.error.length).toBeLessThan(50);
+});

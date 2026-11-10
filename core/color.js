@@ -83,3 +83,42 @@ export function swatchGrid(cols = 12, rows = 5) {
   };
   return steps.map(k => [tone(0, k, true), ...Array.from({ length: cols }, (_, c) => tone((c * 360) / cols, k, false))]);
 }
+
+// ── what the Properties panel's Stroke and Fill rows and their picker show ────────────────────
+// Pure, so the adapter only draws: every color compared through normalizeColor (a board file
+// may hold "#ABC" or upper case), every list deduped, `active` marking the current color.
+
+let GRID = null;
+const pickerGrid = () => (GRID ??= swatchGrid(12, 5));   // 5 rows × 13, built once
+const uniqColors = list => [...new Set((Array.isArray(list) ? list : []).map(normalizeColor).filter(Boolean))];
+
+// A Stroke or Fill row: the fixed swatches, then the person's saved colors not already among
+// them, and `custom`: the current color when it is in neither (so the row still shows it).
+export function colorRow(fixed, saved, current) {
+  const cur = normalizeColor(current), mark = c => ({ color: c, active: c === cur });
+  const fx = uniqColors(fixed), own = uniqColors(saved).filter(c => !fx.includes(c));
+  const custom = cur && !fx.includes(cur) && !own.includes(cur) ? cur : null;
+  return { fixed: fx.map(mark), saved: own.map(mark), custom };
+}
+
+// The picker under a row, for kind "stroke" | "fill": the grid, the recent colors (no "none"
+// for strokes), every saved color (each removable), whether "save" can add the current color
+// (not "none", not already one click away in the row), and whether "none" is current (fill).
+export function pickerModel({ kind, fixed, saved, recent, current }) {
+  const cur = normalizeColor(current), mark = c => ({ color: c, active: c === cur });
+  const own = uniqColors(saved), inRow = new Set([...uniqColors(fixed), ...own]);
+  return {
+    grid: pickerGrid().map(row => row.map(mark)),
+    recent: uniqColors(recent).filter(c => kind === "fill" || c !== "transparent").map(mark),
+    saved: own.map(mark),
+    canSave: !!cur && cur !== "transparent" && !inRow.has(cur),
+    none: kind === "fill" ? { active: cur === "transparent" } : null,
+    hex: cur && cur !== "transparent" ? cur : "",
+  };
+}
+
+// What a person typed in the picker's hex field: { color } or { error } (short, for the panel).
+export function parseColorInput(text) {
+  const c = normalizeColor(text);
+  return c ? { color: c } : { error: `"${String(text ?? "").trim().slice(0, 12)}" isn't a color: try #1971c2` };
+}
