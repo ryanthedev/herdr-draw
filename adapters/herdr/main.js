@@ -1046,6 +1046,7 @@ export default class Draw extends View {
     this.ed.setStyle({ [this.colorKey(kind)]: color });
     changePanel({ type: "used", color });
     this.hexInput.set_value(color === "transparent" ? "" : color); this.hexMsg = null;
+    this.hexFocused = false;   // every apply hands the keyboard back to the board (no blur may come)
   }
   toggleColorPick(kind) {
     if (this.colorPick === kind) return this.closeColorPick();

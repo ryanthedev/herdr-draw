@@ -719,6 +719,12 @@ test("color picker: Escape in the hex field closes the picker and gives the boar
   const before = ui.view.ed.style.strokeColor;
   ui.key("c");                                                               // a board key again
   expect(ui.view.ed.style.strokeColor).not.toBe(before);
+  // A swatch clicked while the field has the keyboard hands it back too (GPUI may send no blur).
+  ui.click("st-pick"); hexField(ui).focus();
+  ui.click("cp-g-1-1");
+  const picked = ui.view.ed.style.strokeColor;
+  ui.key("c");
+  expect(ui.view.ed.style.strokeColor).not.toBe(picked);
   await freshPanel();
 });
 
