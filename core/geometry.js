@@ -329,8 +329,8 @@ function labelBox(doc, label, host) {
   const lh = label.lineHeight ?? 1.25;
   let c, lines;
   if (isLinear(host)) {
-    const pts = drawnPoints(doc, host); if (pts.length < 2) return null;
-    const m = alongPath(pts); c = { x: m[0], y: m[1] }; lines = String(label.text ?? "").split("\n");
+    const m = labelAnchor(doc, host); if (!m) return null;
+    c = { x: m[0], y: m[1] }; lines = String(label.text ?? "").split("\n");
   } else { c = center(bbox({ ...host, angle: 0 })); lines = labelLines(label, host); }
   const width = Math.max(1, ...lines.map(l => textSize(l, label.fontSize, lh, label.fontFamily).w)), height = lines.length * label.fontSize * lh;
   return { x: c.x - width / 2, y: c.y - height / 2, width, height };
@@ -350,7 +350,21 @@ export function mapIntoBox(el, orig, from, to) {
   }
 }
 
-// The point a fraction of the way along a polyline (by length): where an arrow's label sits.
+// Where an arrow's label sits, as excalidraw.com puts it (probed 2026-11-11 by editing labels there):
+// an odd number of points, the middle point; an even number, halfway along the middle stretch, on the
+// curve when the arrow is curved. Not halfway along the length: on a bent arrow that differs.
+export function labelAnchor(doc, el) {
+  const pts = resolvedPoints(doc, el), n = pts.length;
+  if (n < 2) return null;
+  if (n % 2) return [...pts[(n - 1) / 2]];
+  const i = n / 2 - 1, p1 = pts[i], p2 = pts[i + 1];
+  if (!(el.roundness && !el.elbowed) || n < 3) return [(p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2];
+  const p0 = pts[i - 1] ?? p1, p3 = pts[i + 2] ?? p2;   // curveThrough at t = 0.5 on that stretch
+  const f = (a, b, c, d) => 0.5 * (2 * b + (c - a) * 0.5 + (2 * a - 5 * b + 4 * c - d) * 0.25 + (3 * b - a - 3 * c + d) * 0.125);
+  return [f(p0[0], p1[0], p2[0], p3[0]), f(p0[1], p1[1], p2[1], p3[1])];
+}
+
+// The point a fraction of the way along a polyline (by length).
 export function alongPath(pts, f = 0.5) {
   let total = 0; for (let i = 1; i < pts.length; i++) total += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
   let left = total * f;

@@ -245,3 +245,16 @@ test("a bend handle on a curve sits on the curve", () => {
   const drawn = drawnPoints(t.ed.doc, t.ed.doc.get(a.id));
   for (const h of t.ed.handles().filter(h => h.kind === "mid")) expect(drawn.some(p => Math.hypot(p[0] - h.x, p[1] - h.y) < 0.5)).toBe(true);
 });
+
+// Probed on excalidraw.com 2026-11-11 (edit a label there and it moves to its spot): these are its numbers.
+test("an arrow's label sits where excalidraw.com puts it: the middle point, or the middle stretch's middle", async () => {
+  const { labelAnchor } = await import("../core/geometry.js");
+  const { Doc } = await import("../core/doc.js");
+  const { makeElement } = await import("../core/model.js");
+  const at = (x, y, points, extra = {}) => labelAnchor(new Doc({ elements: [] }), makeElement("arrow", { x, y, points, ...extra })).map(Math.round);
+  expect(at(50, 50, [[0, 0], [300, 0], [300, 60]])).toEqual([350, 50]);                          // 3 points: the bend
+  expect(at(50, 200, [[0, 0], [60, 0], [60, 200], [360, 200]])).toEqual([110, 300]);             // 4: the middle stretch
+  expect(at(500, 200, [[0, 0], [60, 0], [60, 200], [360, 200]], { roundness: { type: 2 } })).toEqual([545, 300]);   // on the curve
+  expect(at(500, 50, [[0, 0], [40, 0], [40, 40], [300, 40], [300, 100]])).toEqual([540, 90]);    // 5: the middle point
+  expect(at(0, 0, [[0, 0], [200, 100]])).toEqual([100, 50]);                                      // 2: halfway, as before
+});

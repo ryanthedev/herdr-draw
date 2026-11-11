@@ -119,7 +119,8 @@ sent only to that window's id; quit it by its pid when done.
   the other end as before. excalidraw.com keeps our port fixedPoints on straight arrows (probe, 2026-11-08) but treats them
   as aim points, so a port facing away from the other end shows the line leaving another side there. Ends bind while
   dragging (no jump on release); ⌘ held: no binding. Curves (`roundness`) are drawn through their points (`curveThrough`)
-  in render only: files keep the points.
+  in render only: files keep the points. Arrow labels sit where excalidraw.com puts them (`labelAnchor`, probed): the middle
+  point (odd count) or the middle stretch's middle (even; on the curve if curved), not halfway along the length.
 - Images: `image` elements point at `files[fileId]` (base64 data URLs, ids are SHA-1 of the bytes); ops carry an add-only `files` map.
   `image()` loads only paths under `appHome()` (`$HERDR_APP_HOME` in a test window, not `home()`), so the pane decodes blobs into
   `<appHome>/.cache/herdr-draw/img/` (base64 via a temp file, never argv). Like text, images can't rotate in the pane; they paint in

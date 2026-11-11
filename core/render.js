@@ -7,7 +7,7 @@
 // Colors arrive as #rrggbb or #rrggbbaa; the theme decides what "default ink" is.
 
 import { DEFAULT_STROKE, isShape, isLinear, isLabel, textSize } from "./model.js";
-import { bbox, resolvedPoints, drawnPoints, toWorld, angleOf, centerOf, alongPath } from "./geometry.js";
+import { bbox, resolvedPoints, drawnPoints, toWorld, angleOf, centerOf, labelAnchor } from "./geometry.js";
 import { animState } from "./anim.js";
 import { labelLines, textWidth } from "./text.js";
 import { cornerRadius, roundPolygon, fillLines, arrowheadCmds, fontClass } from "./style.js";
@@ -153,7 +153,7 @@ export function paintElement(doc, el, P, view, theme, out, opts = {}) {
       const box = doc.get(el.containerId); if (!box) return;
       let b = bbox(box);
       if (isLinear(box)) {   // a line's label sits halfway along its path (elbows included)
-        const m = alongPath(drawnPoints(doc, box)), lw = Math.max(40, textSize(el.text, el.fontSize, 1.25, el.fontFamily).w), lh = el.fontSize * 1.4;
+        const m = labelAnchor(doc, box) ?? [0, 0], lw = Math.max(40, textSize(el.text, el.fontSize, 1.25, el.fontFamily).w), lh = el.fontSize * 1.4;
         b = { x: m[0] - lw / 2, y: m[1] - lh / 2, w: lw, h: lh };
       }
       const [x0, y0] = Q(b.x, b.y), [x1, y1] = Q(b.x + b.w, b.y + b.h);
