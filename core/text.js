@@ -41,7 +41,9 @@ export function labelWidthFactor(type) {
 }
 
 // Split text into lines no wider than maxW (scene px) at this font size and family.
-// Explicit newlines are kept; words much longer than a line are broken.
+// Explicit newlines are kept. A word wider than a line breaks at its seams first (camelCase humps,
+// before an opening bracket, after _ - . / : , and closing brackets): "EvaluateNdc" + "FraudBlock)".
+// A seam piece still too wide breaks between letters, in even pieces ("signa" + "ture", not "signatu" + "re").
 export function wrapLines(text, maxW, fontSize, fontFamily = 2) {
   if (!(fontSize > 0) || !Number.isFinite(fontSize)) return String(text ?? "").split("\n");   // a broken board: don't wrap
   const W = t => textWidth(t, fontSize, fontFamily);
@@ -52,14 +54,10 @@ export function wrapLines(text, maxW, fontSize, fontFamily = 2) {
     let line = "";
     for (const word of para.split(/ +/)) {
       let w = word;
-      // A word a bit wider than the line stays whole (widths are estimates, and a slight
-      // overflow reads better than "signatur/e"); a much longer one breaks.
-      if (W(w) > maxW * 1.5) {
+      if (W(w) > maxW) {
         if (line) { out.push(line); line = ""; }
-        while (w.length > 1 && W(w) > maxW) {   // takes at least one char per line, so it ends
-          let n = 1; while (n < w.length && W(w.slice(0, n + 1)) <= maxW) n++;
-          out.push(w.slice(0, n)); w = w.slice(n);
-        }
+        const pieces = breakWord(w, maxW, W);
+        out.push(...pieces.slice(0, -1)); w = pieces[pieces.length - 1];
       }
       if (!line) line = w;
       else if (W(line + " " + w) <= maxW) line += " " + w;
@@ -68,6 +66,49 @@ export function wrapLines(text, maxW, fontSize, fontFamily = 2) {
     out.push(line);
   }
   return out;
+}
+
+// Where a word may break without reading as a typo: before a camelCase hump (aB, a1B, HTTPServer → HTTP|Server)
+// or an opening bracket, after _ - . / : , ; = and closing brackets.
+function seams(word) {
+  const atoms = []; let cur = "";
+  const ch = [...word], up = c => c >= "A" && c <= "Z", low = c => (c >= "a" && c <= "z") || (c >= "0" && c <= "9");
+  for (let i = 0; i < ch.length; i++) {
+    const c = ch[i], prev = ch[i - 1], next = ch[i + 1];
+    const before = cur && (("([{<".includes(c)) || (up(c) && prev && (low(prev) || (up(prev) && next && low(next)))));
+    if (before) { atoms.push(cur); cur = ""; }
+    cur += c;
+    if ("_-./:,;=)]}>".includes(c) && i < ch.length - 1) { atoms.push(cur); cur = ""; }
+  }
+  if (cur) atoms.push(cur);
+  return atoms;
+}
+
+// A word wider than maxW as lines no wider than maxW (while there's more than one char to a line).
+function breakWord(word, maxW, W) {
+  const out = []; let cur = "";
+  for (const atom of seams(word)) {
+    if (W(cur + atom) <= maxW) { cur += atom; continue; }
+    if (cur) { out.push(cur); cur = ""; }
+    if (W(atom) <= maxW) { cur = atom; continue; }
+    const parts = letters(atom, maxW, W);
+    out.push(...parts.slice(0, -1)); cur = parts[parts.length - 1];
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+// Letters in as few lines as fit, then evened out so the last isn't a stub.
+function letters(s, maxW, W) {
+  const ch = [...s], greedy = [];
+  for (let i = 0; i < ch.length;) {   // at least one char per line, so it ends
+    let n = 1; while (i + n < ch.length && W(ch.slice(i, i + n + 1).join("")) <= maxW) n++;
+    greedy.push(ch.slice(i, i + n).join("")); i += n;
+  }
+  if (greedy.length < 2) return greedy;
+  const per = Math.ceil(ch.length / greedy.length), even = [];
+  for (let i = 0; i < ch.length; i += per) even.push(ch.slice(i, i + per).join(""));
+  return even.length === greedy.length && even.every(p => W(p) <= maxW) ? even : greedy;
 }
 
 // The lines a shape's label shows at the shape's current width.

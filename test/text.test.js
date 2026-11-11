@@ -10,9 +10,22 @@ test("wrapLines: word wrap, explicit newlines, long words broken", () => {
   // Mono (fontFamily 3) at 20px is 12px per char: 120px fits 10 chars.
   expect(wrapLines("the quick brown fox jumps", 120, 20, 3)).toEqual(["the quick", "brown fox", "jumps"]);
   expect(wrapLines("a\nb", 500, 20, 3)).toEqual(["a", "b"]);
-  expect(wrapLines("abcdefghijklmnopqrstuvwxyz", 120, 20, 3)).toEqual(["abcdefghij", "klmnopqrst", "uvwxyz"]);
+  expect(wrapLines("abcdefghijklmnopqrstuvwxyz", 120, 20, 3)).toEqual(["abcdefghi", "jklmnopqr", "stuvwxyz"]);   // even pieces
   expect(wrapLines("", 100, 20, 3)).toEqual([""]);
-  expect(wrapLines("is the signature valid", 90, 20, 3)).toEqual(["is the", "signature", "valid"]);   // 9 chars on a 7-char line stays whole
+  expect(wrapLines("is the signature valid", 90, 20, 3)).toEqual(["is the", "signa", "ture", "valid"]);   // too wide: even pieces, no stub
+});
+
+test("wrapLines: a word too wide for its line breaks at its seams before its letters, and never spills", () => {
+  const w = (t, max) => wrapLines(t, max, 20, 2);
+  expect(w("(EvaluateNdcFraudBlock)", 150)).toEqual(["(EvaluateNdc", "FraudBlock)"]);
+  expect(w("EvaluateNdcFraudBlock", 100)).toEqual(["Evaluate", "NdcFraud", "Block"]);
+  expect(w("evaluate_ndc_fraud_block_handler", 160)).toEqual(["evaluate_ndc_", "fraud_block_", "handler"]);
+  expect(w("HTTPServerError", 80)).toEqual(["HTTP", "Server", "Error"]);
+  expect(w("/usr/local/lib/payments", 100)[0]).toBe("/usr/local/");
+  // Whatever the text and width, no line is wider than the width (one char a line at the least).
+  for (const t of ["(EvaluateNdcFraudBlock)", "com.example.payments.FraudService", "supercalifragilistic", "a_b-c.d/e:f", "WWWWWWWW iii", "日本語のテキスト"])
+    for (const max of [30, 45, 60, 90, 140, 200])
+      for (const line of wrapLines(t, max, 20, 2)) expect(textWidth(line, 20, 2) <= max || [...line].length === 1).toBe(true);
 });
 
 test("wrapLines always ends, whatever the width or size (a hostile board can't hang the pane)", () => {

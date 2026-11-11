@@ -80,7 +80,7 @@ test("the checker sees each kind of overlap", () => {
   const a = box("a", 0, 0, 120), b = box("b", 400, 0), c = box("c", 200, -20), d = box("d", 100, 40);
   const arrow = makeElement("arrow", { x: 130, y: 40, points: [[0, 0], [260, 0]], startBinding: { elementId: "a", gap: 6 }, endBinding: { elementId: "b", gap: 6 } });
   const msgs = overlaps([a, label(a, "EvaluateNdcFraudBlock"), b, c, d, arrow]).map(p => p.msg).join("\n");
-  expect(msgs).toContain("\"EvaluateNdcFraudBlock\" is ");
+  expect(msgs).toContain("\"EvaluateNdcFraudBlock\" doesn't fit whole");
   expect(msgs).toContain("crosses \"c\"");
   expect(msgs).toMatch(/"EvaluateNdcFraudBlock" and rectangle "d" overlap/);
 });

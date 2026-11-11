@@ -95,8 +95,8 @@ sent only to that window's id; quit it by its pid when done.
 - Text is drawn as divs above all paths (no text-in-path API), so text always paints over shapes.
 - A labeled shape is never narrower than its label's longest word (`labelHostWidth`, core/text.js): the pane's
   `fitHost` widens it about its center when text is typed, resizing stops there, and drawh widens what a write touched.
-  `wrapLines` still leaves a word up to 1.5× the line whole (spills) and breaks longer ones between letters, so
-  boards from elsewhere can still show either; `drawh check` reports both.
+  In a box nothing widened (boards from elsewhere), `wrapLines` breaks a too-wide word at its seams (camelCase, `( _ - . / :`),
+  then between letters in even pieces: nothing spills. `drawh check` still names such words (the box could be wider).
 - Mermaid layout (core/mermaid.js) doubles ranks: nodes on even ranks, every edge through one "lane" per rank between
   its ends (label-sized where its label goes), so labels, skipped ranks and A→B/B→A get room. Elbows route themselves
   and ignore lanes: an elbow that `overlaps()` flags is redone as a curve through its lanes.

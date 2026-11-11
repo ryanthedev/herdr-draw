@@ -37,12 +37,12 @@ export function overlaps(elements) {
   const container = (e, s) => s.id !== e.startBinding?.elementId && s.id !== e.endBinding?.elementId &&
     (holds(s, doc.get(e.startBinding?.elementId)) || holds(s, doc.get(e.endBinding?.elementId)));
   const box = el => bbox({ ...el, angle: 0 });
-  // 1. every word of a shape's label fits inside it whole (a wider word spills out, or breaks between letters)
+  // 1. every word of a shape's label fits inside it whole (a wider one is broken across lines)
   for (const s of shapes) {
     const l = doc.labelOf(s); if (!l?.text) continue;
     const usable = Math.abs(s.width) * labelWidthFactor(s.type) - LABEL_PAD * 2;
     const words = [...new Set(String(l.text).split(/[ \n]+/).filter(Boolean))];
-    for (const word of words) { const w = textWidth(word, l.fontSize, l.fontFamily); if (w > usable + 0.5) add(`${JSON.stringify(word)} is ${w.toFixed(0)}px wide; ${s.type} ${name(s)} has room for ${Math.max(0, usable).toFixed(0)}px (make it ${labelHostWidth(l, s.type)} wide)`, s.id); }
+    for (const word of words) { const w = textWidth(word, l.fontSize, l.fontFamily); if (w > usable + 0.5) add(`${JSON.stringify(word)} doesn't fit whole in ${s.type} ${name(s)}: ${w.toFixed(0)}px, room for ${Math.max(0, usable).toFixed(0)}px (make it ${labelHostWidth(l, s.type)} wide)`, s.id); }
   }
   // 2. shapes don't partly cover each other (one wholly inside another is a container: fine)
   for (const a of shapes) for (const b of shapes) if (a.id < b.id) {
