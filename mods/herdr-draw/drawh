@@ -1,0 +1,790 @@
+#!/usr/bin/env python3
+"""drawh: drive the Herdr whiteboard (herdr-draw) from a shell. Built for agents.
+
+The board is an .excalidraw file; the pane watches it and redraws on every change.
+Coordinates are scene pixels, x right, y down. Shapes are 140x80 unless --w/--h, and never narrower
+than their label's longest word (widened about their center). Writes warn about overlaps they cause.
+Needs node (or bun) on PATH: every write of a board with labels or arrows runs the board's own core
+(arrow routes, label boxes) so the file opens right without the pane, and in excalidraw.com (~0.2 s).
+
+  drawh open FILE [--down]                      open FILE in a pane beside the focused one (creates it)
+  drawh ls FILE [--json]                        list elements: id, type, box, label, arrow ends
+  drawh add FILE rect|ellipse|diamond --at X,Y [--w W --h H] [--label TEXT] [--id ID]
+            [--color red|green|blue|orange|purple|default] [--fill red|green|blue|yellow|purple]
+            [--dashed]                          add a shape; prints its id
+  drawh text FILE --at X,Y TEXT [--size 20] [--color C]
+  drawh arrow FILE FROM TO [--label TEXT] [--line] [--elbow] [--dashed] [--color C]
+                                                connect two element ids (or labels); the pane routes it
+  drawh label FILE ID TEXT                      set or replace a shape's or an arrow's label
+  drawh move FILE ID --at X,Y | --by DX,DY
+  drawh style FILE ID [--color C] [--fill C|none] [--dashed|--solid]
+  drawh mermaid FILE [SRC] [--at X,Y] [--elbow]         import a Mermaid flowchart (file, or - / nothing for stdin) as
+                                                editable, laid-out shapes and bound arrows; prints the new ids
+  drawh image FILE PATH [--at X,Y] [--w W]      put a picture (png, jpg, gif, webp, svg; others via sips) on the
+                                                board; natural size unless --w; below the drawing unless --at
+  drawh export FILE [--out PATH] [--svg] [--dark] [--scale 2]
+                                                the drawing, cropped, as a PNG (2x, via sips) or SVG; on the
+                                                board's page color (--dark: dark page); prints the path
+  drawh lib ls | add FILE ID... [--name N] | insert FILE NAME|ID [--at X,Y] | import PATH.excalidrawlib | rm NAME|ID
+                                                the shared library (excalidraw.com's .excalidrawlib format), also in the
+                                                pane's sidebar; --lib PATH for another file
+  drawh frame FILE NAME --at X,Y [--w 800 --h 600] | --around ID... [--pad 40]
+                                                a named frame: a page of the board (PgDn / PgUp in the pane step
+                                                through frames, top to bottom, left to right); --around fits it
+                                                around existing elements; drawn under them; prints its id
+  drawh rotate FILE ID... DEG                   turn elements by DEG degrees (clockwise) about their center
+  drawh rm FILE ID...                           delete elements (and their labels)
+  drawh clear FILE                              delete everything
+  drawh grid FILE LABEL... [--cols N] [--kind rect] [--gap 60]
+                                                lay out labeled shapes in a grid; prints ids
+  drawh check FILE [--json]                     what overlaps as drawn: label lines wider than their shape, edges
+                                                through shapes, edge labels on shapes or each other, edges on top of
+                                                each other; exits 1 if any (every write warns about its own)
+  drawh layers FILE                             list layers (bottom first)
+  drawh layer FILE NAME [--hide|--show|--lock|--unlock|--opacity N]
+                                                create or change a layer; new elements go to it with --layer NAME
+  drawh animate FILE ID... --preset fade|rise|slide|pop|draw|pulse|out [--start MS] [--duration MS] [--stagger MS]
+                                                animate elements on the timeline (shift-space in the pane plays)
+  drawh play                                    play / pause the timeline in open boards
+  drawh fit                                     zoom every open board to fit its drawing
+  drawh sel                                     what the person has selected in the pane
+
+Shapes, text and grids take --layer NAME (created if missing).
+IDs: anywhere an ID is expected, a shape's exact label also works.
+"""
+import argparse, base64, hashlib, json, math, os, random, struct, subprocess, sys, tempfile, time
+
+CACHE = os.path.expanduser("~/.cache/herdr-draw")
+COLORS = {"default": "#1e1e1e", "black": "#1e1e1e", "red": "#e03131", "green": "#2f9e44", "blue": "#1971c2",
+          "orange": "#f08c00", "purple": "#9c36b5"}
+FILLS = {"none": "transparent", "red": "#ffc9c9", "green": "#b2f2bb", "blue": "#a5d8ff", "yellow": "#ffec99",
+         "purple": "#eebefa", "orange": "#ffd8a8"}
+KINDS = {"rect": "rectangle", "rectangle": "rectangle", "box": "rectangle", "ellipse": "ellipse",
+         "circle": "ellipse", "diamond": "diamond"}
+
+
+def die(msg):
+    sys.exit(f"drawh: {msg}")
+
+
+def rnd():
+    return random.randint(1, 2**31 - 1)
+
+
+def new_id():
+    return "%x%x" % (time.time_ns() // 1000, random.randint(0, 0xFFFF))
+
+
+def base(kind, **kw):
+    el = {"id": new_id(), "type": kind, "x": 0, "y": 0, "width": 0, "height": 0, "angle": 0,
+          "strokeColor": COLORS["default"], "backgroundColor": "transparent", "fillStyle": "solid",
+          "strokeWidth": 2, "strokeStyle": "solid", "roughness": 1, "opacity": 100, "groupIds": [],
+          "frameId": None, "roundness": None, "seed": rnd(), "version": 1, "versionNonce": rnd(),
+          "isDeleted": False, "boundElements": None, "updated": int(time.time() * 1000), "link": None,
+          "locked": False}
+    el.update(kw)
+    return el
+
+
+def text_el(text, x, y, size=20, container=None, color=COLORS["default"]):
+    text = text.replace("\\n", "\n")   # `--label "two\nlines"` from a shell
+    lines = text.split("\n")
+    w, h = max(len(l) for l in lines) * size * 0.5, len(lines) * size * 1.25   # a placeholder: core sizes text and label boxes on save
+    return base("text", x=x, y=y, width=w, height=h, text=text, originalText=text, fontSize=size, fontFamily=2,
+                textAlign="center" if container else "left", verticalAlign="middle" if container else "top",
+                containerId=container, lineHeight=1.25, autoResize=True, baseline=int(size * 0.9),
+                strokeColor=color)
+
+
+def layers(scene):
+    h = scene.setdefault("appState", {}).setdefault("herdr", {})
+    if not h.get("layers"):
+        h["layers"] = [{"id": "base", "name": "Layer 1", "visible": True, "locked": False, "opacity": 100}]
+    return h["layers"]
+
+
+def layer_id(scene, name):
+    ls = layers(scene)
+    if not name:
+        return ls[-1]["id"]
+    for l in ls:
+        if l["name"] == name or l["id"] == name:
+            return l["id"]
+    l = {"id": new_id(), "name": name, "visible": True, "locked": False, "opacity": 100}
+    ls.append(l)
+    return l["id"]
+
+
+def place(scene, el, layer=None):
+    """Put el on a layer, on top of everything there."""
+    lid = layer_id(scene, layer)
+    top = max([e.get("customData", {}).get("z", 0) for e in live(scene) if e.get("customData", {}).get("layer", "base") == lid] or [0])
+    el["customData"] = {**el.get("customData", {}), "layer": lid, "z": top + 1}
+    scene["elements"].append(el)
+    return el
+
+
+def mermaid_elements(src, elbow=False):
+    """Run the board's own Mermaid importer (core/mermaid.js) so agents and the pane lay out alike."""
+    here = os.path.dirname(os.path.realpath(__file__))
+    core = next((c for c in (os.path.join(here, "core"), os.path.join(here, "..", "core")) if os.path.exists(os.path.join(c, "mermaid.js"))), None)
+    if not core:
+        die("can't find core/mermaid.js next to drawh")
+    script = ("import { mermaidToElements } from %s; let s = ''; process.stdin.on('data', d => s += d);"
+              "process.stdin.on('end', () => { try { process.stdout.write(JSON.stringify(mermaidToElements(s, { elbow: %s }).elements)); }"
+              " catch (e) { process.stderr.write(String(e.message || e)); process.exit(2); } });") % (json.dumps("file://" + os.path.join(os.path.abspath(core), "mermaid.js")), "true" if elbow else "false")
+    for runtime in (["node", "--input-type=module", "-e", script], ["bun", "-e", script]):
+        try:
+            r = subprocess.run(runtime, input=src, capture_output=True, text=True)
+        except FileNotFoundError:
+            continue
+        if r.returncode:
+            die("mermaid: " + (r.stderr.strip() or "import failed"))
+        return json.loads(r.stdout)
+    die("mermaid import needs node or bun on PATH")
+
+
+MIMES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp", "svg": "image/svg+xml"}
+
+
+def image_size(data):
+    """Natural (width, height) from a PNG, GIF, JPEG or WebP header; None if unknown (SVG)."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return struct.unpack(">II", data[16:24])
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return struct.unpack("<HH", data[6:10])
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        kind = data[12:16]
+        if kind == b"VP8X": return (int.from_bytes(data[24:27], "little") + 1, int.from_bytes(data[27:30], "little") + 1)
+        if kind == b"VP8 ": w, h = struct.unpack("<HH", data[26:30]); return (w & 0x3FFF, h & 0x3FFF)
+        if kind == b"VP8L": b = int.from_bytes(data[21:25], "little"); return ((b & 0x3FFF) + 1, ((b >> 14) & 0x3FFF) + 1)
+    if data[:2] == b"\xff\xd8":
+        i = 2
+        while i + 9 < len(data):
+            if data[i] != 0xFF: i += 1; continue
+            marker, size = data[i + 1], struct.unpack(">H", data[i + 2:i + 4])[0]
+            if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                h, w = struct.unpack(">HH", data[i + 5:i + 9]); return (w, h)
+            i += 2 + size
+    return None
+
+
+def read_image(src):
+    """(mime, bytes) for a picture file; formats Excalidraw can't show are converted to PNG with sips."""
+    ext = src.rsplit(".", 1)[-1].lower()
+    if not os.path.isfile(src):
+        die(f"no such file: {src}")
+    if ext in MIMES:
+        data = open(src, "rb").read()
+        if ext != "svg" and image_size(data) is None:
+            die(f"{src} isn't a {ext} image")
+        return MIMES[ext], data
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, "x.png")
+        r = subprocess.run(["sips", "-s", "format", "png", src, "--out", out], capture_output=True)
+        if r.returncode or not os.path.exists(out):
+            die(f"{src} isn't an image drawh can read")
+        return "image/png", open(out, "rb").read()
+
+
+def core_dir():
+    here = os.path.dirname(os.path.realpath(__file__))
+    for c in (os.path.join(here, "core"), os.path.join(here, "..", "core")):
+        if os.path.exists(os.path.join(c, "export.js")):
+            return os.path.abspath(c)
+    die("can't find core/ next to drawh")
+
+
+def label_min_width(labels, kind, size=20):
+    """The width a `kind` shape needs so the longest word of each label fits whole (core/text.js labelHostWidth)."""
+    url = json.dumps("file://" + os.path.join(core_dir(), "text.js"))
+    script = ("import { labelHostWidth } from %s; let s = ''; process.stdin.on('data', d => s += d); process.stdin.on('end', () => {"
+              " const { labels, kind, size } = JSON.parse(s);"
+              " process.stdout.write(String(Math.max(0, ...labels.map(t => labelHostWidth({ text: t.replace(/\\\\n/g, '\\n'), fontSize: size, fontFamily: 2 }, kind))))); });") % url
+    return float(run_js(script, json.dumps({"labels": labels, "kind": kind, "size": size})))
+
+
+def svg_module():
+    here = os.path.dirname(os.path.realpath(__file__))
+    for p in (os.path.join(here, "svg.js"), os.path.join(here, "..", "adapters", "svg", "svg.js")):
+        if os.path.exists(p):
+            return os.path.abspath(p)
+    die("can't find svg.js next to drawh")
+
+
+def run_js(script, stdin):
+    """Run an ES module snippet with node (or bun); stdout back. The board's own code, so agents and the pane agree."""
+    for runtime in (["node", "--input-type=module", "-e", script], ["bun", "-e", script]):
+        try:
+            r = subprocess.run(runtime, input=stdin, capture_output=True, text=True)
+        except FileNotFoundError:
+            continue
+        if r.returncode:
+            die(r.stderr.strip() or "export failed")
+        return r.stdout
+    die("needs node or bun on PATH")
+
+
+def export_svg(scene, scale, dark, raster=False):
+    """The pane's export: core/export.js crops and paints, svg.js writes the SVG."""
+    script = ("import { exportScene, boardTheme, DARK } from %s; import { Doc } from %s; import { toSvg, RASTER_FACES } from %s;"
+              "let s = ''; process.stdin.on('data', d => s += d); process.stdin.on('end', () => {"
+              " const doc = new Doc(JSON.parse(s)); const theme = %s ? DARK : boardTheme(doc.appState);"
+              " const x = exportScene(doc, theme, { scale: %s, maxPixels: 4096 }); process.stdout.write(toSvg(x.items, { ...x, svgImages: %s, faces: %s ? null : RASTER_FACES })); });") % (
+        json.dumps("file://" + os.path.join(core_dir(), "export.js")), json.dumps("file://" + os.path.join(core_dir(), "doc.js")),
+        json.dumps("file://" + svg_module()), "true" if dark else "false", json.dumps(float(scale)), "false" if raster else "true", "false" if raster else "true")
+    return run_js(script, json.dumps(scene))
+
+
+def lib_path(arg=None):
+    """The library the pane shows: <app home>/herdr-draw/library.excalidrawlib (HERDR_APP_HOME picks another app home)."""
+    if arg:
+        return os.path.abspath(os.path.expanduser(arg))
+    home = os.environ.get("HERDR_APP_HOME") or os.path.expanduser("~/.config/herdr-app")
+    return os.path.join(home, "herdr-draw", "library.excalidrawlib")
+
+
+def lib_js(op):
+    """Run a library operation with the pane's own core (editor.js, library.js); JSON in, JSON out."""
+    core = core_dir()
+    script = ("import { Editor } from %s; import * as L from %s; import { unionBox, bbox } from %s;"
+              "let s = ''; process.stdin.on('data', d => s += d); process.stdin.on('end', () => { const op = JSON.parse(s); let out;"
+              " if (op.cmd === 'parse') out = L.parseLibrary(op.text);"
+              " else if (op.cmd === 'add') { const ed = new Editor({ scene: op.scene });"
+              "   ed.select(op.ids.flatMap(id => ed.doc.get(id) ? ed.withGroup(ed.doc.get(id)) : []));"
+              "   out = ed.libraryItem(op.name || undefined); }"
+              " else if (op.cmd === 'insert') { const ed = new Editor({ scene: op.scene, onOp: () => {} });"
+              "   let at = op.at; if (!at) { const live = ed.doc.live().filter(e => !(e.type === 'text' && e.containerId));"
+              "     const ib = unionBox(op.item.elements.filter(e => !(e.type === 'text' && e.containerId)).map(bbox));"
+              "     const b = live.length ? unionBox(live.map(bbox)) : { x: 0, y: -80, w: 0, h: 0 };"
+              "     at = { x: b.x + ib.w / 2, y: b.y + b.h + 80 + ib.h / 2 }; }"
+              "   const ids = ed.insertLibraryItem(op.item, at); out = { scene: ed.scene(), ids }; }"
+              " process.stdout.write(JSON.stringify(out)); });") % tuple(json.dumps("file://" + os.path.join(core, m)) for m in ("editor.js", "library.js", "geometry.js"))
+    return json.loads(run_js(script, json.dumps(op)))
+
+
+def lib_load(path):
+    try:
+        with open(path) as f:
+            return lib_js({"cmd": "parse", "text": f.read()})
+    except FileNotFoundError:
+        return []
+
+
+def lib_save(path, items):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".drawh.tmp"
+    with open(tmp, "w") as f:
+        json.dump({"type": "excalidrawlib", "version": 2, "source": "herdr-draw", "libraryItems": items}, f, indent=2)
+    os.replace(tmp, path)
+
+
+def lib_find(items, ref):
+    hit = [i for i in items if i["id"] == ref] or [i for i in items if i.get("name") == ref]
+    if not hit:
+        die(f"no library item {ref!r} (drawh lib ls)")
+    return hit[0]
+
+
+def touch(el):
+    el["version"] = el.get("version", 1) + 1
+    el["versionNonce"] = rnd()
+    el["updated"] = int(time.time() * 1000)
+
+
+LOADED = {}   # id -> (version, versionNonce) as read: save() settles only what this run changed
+
+
+def load(path):
+    try:
+        with open(path) as f:
+            scene = json.load(f)
+        LOADED.clear()
+        LOADED.update({e.get("id"): (e.get("version"), e.get("versionNonce")) for e in scene.get("elements", [])})
+        return scene
+    except FileNotFoundError:
+        return {"type": "excalidraw", "version": 2, "source": "herdr-draw", "elements": [],
+                "appState": {"viewBackgroundColor": "#ffffff"}, "files": {}}
+    except ValueError as e:
+        die(f"{path} isn't valid JSON: {e}")
+
+
+def settle_for_file(scene):
+    """Bake what the pane derives, with the board's own code (core/geometry.js), so the file opens right
+    without the pane and in excalidraw.com: shapes grown to fit their labels, bound arrows' ends on the
+    outlines, elbow routes and their fixedPoints (new versions), and
+    label boxes (centered in their shape or on their arrow; derived, so no new versions)."""
+    # Only what this run changed (and arrows bound to it) is re-routed or grown, as the pane settles only what was
+    # edited: an arrow excalidraw.com aimed off-center stays as it is until someone moves it or its shapes.
+    touched = [e["id"] for e in scene["elements"] if LOADED.get(e.get("id")) != (e.get("version"), e.get("versionNonce"))]
+    ids = set(touched)
+    free_text = any(e["id"] in ids and e.get("type") == "text" and not e.get("containerId") and not e.get("isDeleted") for e in scene["elements"])
+    if not free_text and not any(not e.get("isDeleted") and (e.get("elbowed") or e.get("containerId") or e.get("startBinding") or e.get("endBinding")) for e in scene["elements"]):
+        return
+    url = lambda m: json.dumps("file://" + os.path.join(core_dir(), m))
+    script = ("import { Doc } from %s; import { settle, fileScene } from %s; import { touch, isShape, textSize } from %s; import { labelHostHeight, labelHostWidth } from %s; import { overlaps } from %s;"
+              "let s = ''; process.stdin.on('data', d => s += d); process.stdin.on('end', () => {"
+              " const { scene, touched } = JSON.parse(s), doc = new Doc(scene), out = {}, t = new Set(touched);"
+              # free text this run wrote takes its width from the font tables (drawh only guessed it)
+              " for (const el of doc.live()) if (el.type === 'text' && !el.containerId && t.has(el.id)) { const z = textSize(el.text, el.fontSize, el.lineHeight, el.fontFamily);"
+              "  if (z.w !== el.width || z.h !== el.height) { const c = structuredClone(el); c.width = z.w; c.height = z.h; doc.apply({ elements: [c] }, { force: true }); out[c.id] = c; } }"
+              # shapes grow to fit their labels (the pane's fitHost): wide enough for the longest word (about their
+              # center), then down for the wrapped lines, before arrows are routed to them
+              " for (const el of doc.live()) { const l = isShape(el) && doc.labelOf(el); if (!l || !l.text || !(t.has(el.id) || t.has(l.id))) continue;"
+              "  const minW = labelHostWidth(l, el.type), c = structuredClone(el), w = Math.abs(c.width);"
+              "  if (w < minW) { const sg = Math.sign(c.width) || 1; c.x -= sg * (minW - w) / 2; c.width = sg * minW; }"
+              "  c.height = Math.max(Math.abs(c.height), labelHostHeight(l, c)) * (Math.sign(c.height) || 1);"
+              "  if (c.width === el.width && c.height === el.height) continue;"
+              "  touch(c); doc.apply({ elements: [c] }, { force: true }); out[c.id] = c; t.add(c.id); }"
+              " for (const el of doc.live()) if ((el.elbowed || el.startBinding || el.endBinding) && (t.has(el.id) || t.has(el.startBinding?.elementId) || t.has(el.endBinding?.elementId))) { const c = structuredClone(el);"
+              "  if (settle(doc, c)) { touch(c); doc.apply({ elements: [c] }, { force: true }); out[c.id] = c; } }"
+              " const before = new Map(doc.toScene().elements.map(e => [e.id, e]));"
+              " for (const e of fileScene(doc, doc.toScene()).elements) if (e !== before.get(e.id)) out[e.id] = e;"
+              # overlaps this run made or touched, for a warning (drawh check lists them all)
+              " for (const id of Object.keys(out)) t.add(id); for (const l of doc.live()) if (l.containerId && t.has(l.id)) t.add(l.containerId);"
+              " const problems = overlaps(doc.toScene().elements).filter(p => p.ids.some(id => t.has(id))).map(p => p.msg);"
+              " process.stdout.write(JSON.stringify({ out, problems })); });") % (url("doc.js"), url("geometry.js"), url("model.js"), url("text.js"), url("lint.js"))
+    done = json.loads(run_js(script, json.dumps({"scene": scene, "touched": touched})))
+    scene["elements"] = [done["out"].get(e["id"], e) for e in scene["elements"]]
+    for msg in done["problems"]:
+        sys.stderr.write(f"drawh: overlap: {msg}\n")
+
+
+def save(path, scene):
+    settle_for_file(scene)
+    tmp = path + ".drawh.tmp"
+    with open(tmp, "w") as f:
+        json.dump(scene, f, indent=2)
+    os.replace(tmp, path)
+
+
+def live(scene):
+    return [e for e in scene["elements"] if not e.get("isDeleted")]
+
+
+def label_of(scene, el):
+    return next((e for e in live(scene) if e["type"] == "text" and e.get("containerId") == el["id"]), None)
+
+
+def find(scene, ref):
+    els = live(scene)
+    hit = next((e for e in els if e["id"] == ref), None)
+    if hit:
+        return hit
+    for e in els:
+        if e["type"] == "text" and e.get("text") == ref:
+            return next((c for c in els if c["id"] == e.get("containerId")), e)
+    die(f"no element with id or label {ref!r} (try: drawh ls FILE)")
+
+
+def pair(s, what):
+    try:
+        a, b = s.split(",")
+        return float(a), float(b)
+    except ValueError:
+        die(f"{what} must look like X,Y")
+
+
+def bound(el, eid, kind):
+    el["boundElements"] = [b for b in (el.get("boundElements") or []) if b["id"] != eid] + [{"id": eid, "type": kind}]
+
+
+def set_label(scene, shape, text, size=20):
+    old = label_of(scene, shape)
+    text = text.replace("\\n", "\n")
+    if old:
+        old["text"] = old["originalText"] = text
+        touch(old)
+        return old
+    t = text_el(text, shape["x"], shape["y"], size=size, container=shape["id"], color=shape["strokeColor"])
+    t["customData"] = dict(shape.get("customData", {}))
+    scene["elements"].append(t)
+    bound(shape, t["id"], "text")
+    touch(shape)
+    return t
+
+
+def box_of(e):
+    """x0, y0, x1, y1 of an element: lines and arrows by their points, anything else by its box."""
+    if e.get("points"):
+        xs = [e["x"] + p[0] for p in e["points"]]; ys = [e["y"] + p[1] for p in e["points"]]
+        return min(xs), min(ys), max(xs), max(ys)
+    x0, x1 = sorted((e["x"], e["x"] + e["width"])); y0, y1 = sorted((e["y"], e["y"] + e["height"]))
+    return x0, y0, x1, y1
+
+
+def center(el):
+    return el["x"] + el["width"] / 2, el["y"] + el["height"] / 2
+
+
+def describe(scene, e):
+    d = {"id": e["id"], "type": e["type"], "x": round(e["x"]), "y": round(e["y"]),
+         "w": round(e["width"]), "h": round(e["height"])}
+    lab = label_of(scene, e)
+    if lab:
+        d["label"] = lab["text"]
+    if e["type"] == "text":
+        d["text"] = e["text"]
+    if e["type"] == "frame":
+        d["name"] = e.get("name") or "Frame"
+    for k, name in (("startBinding", "from"), ("endBinding", "to")):
+        if e.get(k):
+            d[name] = e[k]["elementId"]
+    if e["type"] == "image":
+        f = scene.get("files", {}).get(e.get("fileId"))
+        d["image"] = f["mimeType"] if f else "missing file"
+    elif e.get("strokeColor") != COLORS["default"]:
+        d["color"] = e.get("strokeColor")
+    return d
+
+
+def main():
+    p = argparse.ArgumentParser(prog="drawh", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd", required=True)
+    o = sub.add_parser("open"); o.add_argument("file"); o.add_argument("--down", action="store_true")
+    l = sub.add_parser("ls"); l.add_argument("file"); l.add_argument("--json", action="store_true")
+    a = sub.add_parser("add"); a.add_argument("file"); a.add_argument("kind", choices=sorted(KINDS))
+    a.add_argument("--at", required=True); a.add_argument("--w", type=float, default=140); a.add_argument("--h", type=float, default=80)
+    a.add_argument("--label"); a.add_argument("--id"); a.add_argument("--color"); a.add_argument("--fill"); a.add_argument("--dashed", action="store_true")
+    t = sub.add_parser("text"); t.add_argument("file"); t.add_argument("text"); t.add_argument("--at", required=True)
+    t.add_argument("--size", type=int, default=20); t.add_argument("--color")
+    r = sub.add_parser("arrow"); r.add_argument("file"); r.add_argument("frm"); r.add_argument("to")
+    r.add_argument("--label"); r.add_argument("--line", action="store_true"); r.add_argument("--elbow", action="store_true"); r.add_argument("--dashed", action="store_true"); r.add_argument("--color")
+    lb = sub.add_parser("label"); lb.add_argument("file"); lb.add_argument("id"); lb.add_argument("text")
+    m = sub.add_parser("move"); m.add_argument("file"); m.add_argument("id"); m.add_argument("--at"); m.add_argument("--by")
+    s = sub.add_parser("style"); s.add_argument("file"); s.add_argument("id"); s.add_argument("--color"); s.add_argument("--fill")
+    s.add_argument("--dashed", action="store_true"); s.add_argument("--solid", action="store_true")
+    mm = sub.add_parser("mermaid"); mm.add_argument("file"); mm.add_argument("src", nargs="?", default="-"); mm.add_argument("--at"); mm.add_argument("--layer"); mm.add_argument("--elbow", action="store_true")
+    im = sub.add_parser("image"); im.add_argument("file"); im.add_argument("src"); im.add_argument("--at"); im.add_argument("--w", type=float); im.add_argument("--layer")
+    ex = sub.add_parser("export"); ex.add_argument("file"); ex.add_argument("--out"); ex.add_argument("--svg", action="store_true")
+    ex.add_argument("--dark", action="store_true"); ex.add_argument("--scale", type=float, default=2)
+    lb_ = sub.add_parser("lib"); lb_.add_argument("op", choices=["ls", "add", "insert", "import", "rm"]); lb_.add_argument("rest", nargs="*")
+    lb_.add_argument("--name"); lb_.add_argument("--at"); lb_.add_argument("--lib")
+    fr = sub.add_parser("frame"); fr.add_argument("file"); fr.add_argument("name"); fr.add_argument("--at")
+    fr.add_argument("--w", type=float, default=800); fr.add_argument("--h", type=float, default=600)
+    fr.add_argument("--around", nargs="+"); fr.add_argument("--pad", type=float, default=40); fr.add_argument("--layer")
+    ro = sub.add_parser("rotate"); ro.add_argument("file"); ro.add_argument("ids", nargs="+"); ro.add_argument("deg", type=float)
+    a.add_argument("--angle", type=float, default=0, help="degrees, clockwise")
+    rm = sub.add_parser("rm"); rm.add_argument("file"); rm.add_argument("ids", nargs="+")
+    c = sub.add_parser("clear"); c.add_argument("file")
+    g = sub.add_parser("grid"); g.add_argument("file"); g.add_argument("labels", nargs="+")
+    g.add_argument("--cols", type=int, default=3); g.add_argument("--kind", default="rect"); g.add_argument("--gap", type=float, default=60)
+    g.add_argument("--at", default="0,0"); g.add_argument("--w", type=float, default=160); g.add_argument("--h", type=float, default=80)
+    sub.add_parser("sel"); sub.add_parser("fit"); sub.add_parser("play")
+    ck = sub.add_parser("check"); ck.add_argument("file"); ck.add_argument("--json", action="store_true")
+    ly = sub.add_parser("layers"); ly.add_argument("file")
+    l1 = sub.add_parser("layer"); l1.add_argument("file"); l1.add_argument("name")
+    for f in ("--hide", "--show", "--lock", "--unlock"): l1.add_argument(f, action="store_true")
+    l1.add_argument("--opacity", type=int)
+    an = sub.add_parser("animate"); an.add_argument("file"); an.add_argument("ids", nargs="+")
+    an.add_argument("--preset", default="rise", choices=["fade", "rise", "slide", "pop", "draw", "pulse", "out", "none"])
+    an.add_argument("--start", type=int); an.add_argument("--duration", type=int, default=600); an.add_argument("--stagger", type=int, default=150)
+    for sp in (a, t, g): sp.add_argument("--layer")
+    args = p.parse_args()
+
+    if args.cmd in ("fit", "play"):
+        r = subprocess.run(["herdr-app", "do", "herdr-draw." + args.cmd], capture_output=True, text=True)
+        sys.stderr.write(r.stderr); sys.exit(r.returncode)
+
+    if args.cmd == "sel":
+        try:
+            with open(os.path.join(CACHE, "selection.json")) as f:
+                print(json.dumps(json.load(f), indent=1))
+        except OSError:
+            die("nothing selected yet (click something in the pane)")
+        return
+
+    if args.cmd == "lib":
+        lp = lib_path(args.lib); items = lib_load(lp); r = args.rest
+        if args.op == "ls":
+            for i in items:
+                kinds = sorted({e["type"] for e in i["elements"] if not (e["type"] == "text" and e.get("containerId"))})
+                print(f'{i["id"]:<20} {i.get("name", "(unnamed)"):<24} {len(i["elements"])} elements: {", ".join(kinds)}')
+            if not items:
+                print("(empty)")
+        elif args.op == "add":
+            if len(r) < 2: die("usage: drawh lib add FILE ID... [--name N]")
+            bp = os.path.abspath(os.path.expanduser(r[0])); scene = load(bp)
+            item = lib_js({"cmd": "add", "scene": scene, "ids": [find(scene, x)["id"] for x in r[1:]], "name": args.name})
+            if not item: die("nothing to save")
+            lib_save(lp, [item] + items); print(item["id"])
+        elif args.op == "insert":
+            if len(r) != 2: die("usage: drawh lib insert FILE NAME|ID [--at X,Y]")
+            bp = os.path.abspath(os.path.expanduser(r[0])); scene = load(bp)
+            at = None
+            if args.at:
+                x, y = pair(args.at, "--at"); at = {"x": x, "y": y}
+            res = lib_js({"cmd": "insert", "scene": scene, "item": lib_find(items, r[1]), "at": at})
+            save(bp, res["scene"]); print("\n".join(res["ids"]))
+        elif args.op == "import":
+            if len(r) != 1: die("usage: drawh lib import PATH")
+            with open(os.path.expanduser(r[0])) as f:
+                new = lib_js({"cmd": "parse", "text": f.read()})
+            have = {i["id"] for i in items}; add = [i for i in new if i["id"] not in have]
+            lib_save(lp, add + items); print(f"{len(add)} item{'s' if len(add) != 1 else ''} added")
+        elif args.op == "rm":
+            if len(r) != 1: die("usage: drawh lib rm NAME|ID")
+            gone = lib_find(items, r[0]); lib_save(lp, [i for i in items if i["id"] != gone["id"]])
+        return
+
+    path = os.path.abspath(os.path.expanduser(args.file))
+    color = lambda c: COLORS.get(c, c) if c else None
+    fill = lambda c: FILLS.get(c, c) if c else None
+
+    if args.cmd == "open":
+        if not os.path.exists(path):
+            save(path, load(path))
+        spec = {"direction": "down" if args.down else "right", "mod": "herdr-draw", "props": {"file": path}}
+        r = subprocess.run(["herdr-app", "do", "pane.split", json.dumps(spec)], capture_output=True, text=True)
+        sys.stdout.write(r.stdout); sys.stderr.write(r.stderr); sys.exit(r.returncode)
+
+    scene = load(path)
+
+    if args.cmd == "export":
+        if not os.path.exists(path):
+            die(f"no such board: {path}")
+        stem = path[:-len(".excalidraw")] if path.endswith(".excalidraw") else path
+        out = os.path.abspath(os.path.expanduser(args.out)) if args.out else stem + (".svg" if args.svg else ".png")
+        svg = export_svg(scene, 1 if args.svg else args.scale, args.dark, raster=not args.svg)   # no nested SVGs for sips
+        if args.svg:
+            with open(out, "w") as f:
+                f.write(svg)
+        else:
+            with tempfile.TemporaryDirectory() as d:
+                src = os.path.join(d, "board.svg")
+                with open(src, "w") as f:
+                    f.write(svg)
+                r = subprocess.run(["sips", "-s", "format", "png", src, "--out", out], capture_output=True, text=True)
+                if r.returncode or not os.path.exists(out):
+                    die("sips couldn't make the PNG: " + (r.stderr.strip() or str(r.returncode)))
+        print(out)
+        return
+
+    if args.cmd == "check":
+        url = lambda m: json.dumps("file://" + os.path.join(core_dir(), m))
+        script = ("import { overlaps } from %s; let s = ''; process.stdin.on('data', d => s += d);"
+                  "process.stdin.on('end', () => process.stdout.write(JSON.stringify(overlaps(JSON.parse(s).elements))));") % url("lint.js")
+        problems = json.loads(run_js(script, json.dumps(scene)))
+        if args.json:
+            print(json.dumps(problems, indent=1))
+        else:
+            for p_ in problems:
+                print(p_["msg"])
+            if not problems:
+                print("no overlaps")
+        sys.exit(1 if problems else 0)
+
+    if args.cmd == "ls":
+        rows = [describe(scene, e) for e in live(scene) if not (e["type"] == "text" and e.get("containerId"))]
+        if args.json:
+            print(json.dumps(rows, indent=1))
+        else:
+            for d in rows:
+                extra = " ".join(f"{k}={json.dumps(d[k])}" for k in ("label", "text", "from", "to", "color", "image") if k in d)
+                print(f'{d["id"]:<16} {d["type"]:<10} at {d["x"]},{d["y"]} {d["w"]}x{d["h"]} {extra}'.rstrip())
+            if not rows:
+                print("(empty)")
+        return
+
+    out = None
+    if args.cmd == "add":
+        x, y = pair(args.at, "--at")
+        el = base(KINDS[args.kind], x=x, y=y, width=args.w, height=args.h)
+        if args.id:
+            el["id"] = args.id
+        if args.color: el["strokeColor"] = color(args.color)
+        if args.fill: el["backgroundColor"] = fill(args.fill)
+        if args.dashed: el["strokeStyle"] = "dashed"
+        el["angle"] = math.radians(args.angle) % (2 * math.pi)
+        place(scene, el, args.layer)
+        if args.label:
+            set_label(scene, el, args.label)
+            label_of(scene, el)["angle"] = el["angle"]
+        out = el["id"]
+    elif args.cmd == "text":
+        x, y = pair(args.at, "--at")
+        el = text_el(args.text, x, y, size=args.size, color=color(args.color) or COLORS["default"])
+        place(scene, el, args.layer); out = el["id"]
+    elif args.cmd == "arrow":
+        s, e = find(scene, args.frm), find(scene, args.to)
+        (sx, sy), (ex, ey) = center(s), center(e)
+        el = base("line" if args.line else "arrow", x=sx, y=sy, width=abs(ex - sx), height=abs(ey - sy),
+                  points=[[0, 0], [ex - sx, ey - sy]], lastCommittedPoint=None,
+                  startBinding={"elementId": s["id"], "focus": 0, "gap": 6},
+                  endBinding={"elementId": e["id"], "focus": 0, "gap": 6},
+                  startArrowhead=None, endArrowhead=None if args.line else "arrow")
+        if args.dashed: el["strokeStyle"] = "dashed"
+        if args.color: el["strokeColor"] = color(args.color)
+        if args.elbow and not args.line: el["elbowed"] = True   # the pane routes it with right angles
+        lid = s.get("customData", {}).get("layer", "base")
+        place(scene, el, next((l["name"] for l in layers(scene) if l["id"] == lid), None))
+        for t_ in (s, e):
+            bound(t_, el["id"], "arrow"); touch(t_)
+        if args.label:   # bound to the arrow (Excalidraw's arrow label): it sits halfway along whatever route it takes
+            set_label(scene, el, args.label, size=16)
+        out = el["id"]
+    elif args.cmd == "label":
+        el = find(scene, args.id)
+        if el["type"] == "text":
+            el["text"] = el["originalText"] = args.text; touch(el)
+        else:
+            set_label(scene, el, args.text)
+        out = el["id"]
+    elif args.cmd == "move":
+        el = find(scene, args.id)
+        if args.at:
+            x, y = pair(args.at, "--at"); dx, dy = x - el["x"], y - el["y"]
+        elif args.by:
+            dx, dy = pair(args.by, "--by")
+        else:
+            die("move needs --at X,Y or --by DX,DY")
+        for t_ in [el, label_of(scene, el)]:
+            if t_:
+                t_["x"] += dx; t_["y"] += dy; touch(t_)
+        for a_ in live(scene):
+            if (a_.get("startBinding") or {}).get("elementId") == el["id"] or (a_.get("endBinding") or {}).get("elementId") == el["id"]:
+                touch(a_)
+        out = el["id"]
+    elif args.cmd == "style":
+        el = find(scene, args.id)
+        if args.color:
+            el["strokeColor"] = color(args.color)
+            lab = label_of(scene, el)
+            if lab: lab["strokeColor"] = el["strokeColor"]; touch(lab)
+        if args.fill: el["backgroundColor"] = fill(args.fill)
+        if args.dashed: el["strokeStyle"] = "dashed"
+        if args.solid: el["strokeStyle"] = "solid"
+        touch(el); out = el["id"]
+    elif args.cmd == "rm":
+        for ref in args.ids:
+            el = find(scene, ref)
+            for t_ in [el, label_of(scene, el)]:
+                if t_:
+                    t_["isDeleted"] = True; touch(t_)
+            for a_ in live(scene):
+                for k in ("startBinding", "endBinding"):
+                    if (a_.get(k) or {}).get("elementId") == el["id"]:
+                        a_[k] = None; touch(a_)
+    elif args.cmd == "layers":
+        counts = {}
+        for e in live(scene):
+            if not (e["type"] == "text" and e.get("containerId")):
+                k = e.get("customData", {}).get("layer", "base"); counts[k] = counts.get(k, 0) + 1
+        for l in layers(scene):
+            flags = ("" if l["visible"] else " hidden") + (" locked" if l["locked"] else "") + (f' {l["opacity"]}%' if l["opacity"] < 100 else "")
+            print(f'{l["id"]:<16} {l["name"]:<20} {counts.get(l["id"], 0)} elements{flags}')
+        return
+    elif args.cmd == "layer":
+        lid = layer_id(scene, args.name)
+        for l in layers(scene):
+            if l["id"] == lid:
+                if args.hide: l["visible"] = False
+                if args.show: l["visible"] = True
+                if args.lock: l["locked"] = True
+                if args.unlock: l["locked"] = False
+                if args.opacity is not None: l["opacity"] = max(0, min(100, args.opacity))
+        out = lid
+    elif args.cmd == "animate":
+        els = [find(scene, r) for r in args.ids]
+        if args.start is None:
+            ends = [(e.get("customData", {}).get("anim") or {}) for e in live(scene) if e not in els]
+            args.start = max([a.get("start", 0) + a.get("duration", 600) for a in ends if a and "start" in a] or [0])
+        t_ = args.start
+        for e in els:
+            for x in [e, label_of(scene, e)]:
+                if not x: continue
+                cd = dict(x.get("customData", {}))
+                if args.preset == "none": cd.pop("anim", None)
+                else: cd["anim"] = {"preset": args.preset, "start": t_, "duration": args.duration}
+                x["customData"] = cd; touch(x)
+            t_ += args.stagger
+    elif args.cmd == "frame":
+        if args.around:
+            boxes = [box_of(find(scene, r)) for r in args.around]
+            x0, y0 = min(b[0] for b in boxes) - args.pad, min(b[1] for b in boxes) - args.pad
+            x1, y1 = max(b[2] for b in boxes) + args.pad, max(b[3] for b in boxes) + args.pad
+        elif args.at:
+            x0, y0 = pair(args.at, "--at"); x1, y1 = x0 + args.w, y0 + args.h
+        else:
+            die("frame needs --at X,Y or --around ID...")
+        el = base("frame", x=x0, y=y0, width=x1 - x0, height=y1 - y0, name=args.name, strokeWidth=1)
+        # Under everything on its layer, as the pane draws a new frame.
+        lid = layer_id(scene, args.layer)
+        low = min([e.get("customData", {}).get("z", 0) for e in live(scene) if e.get("customData", {}).get("layer", "base") == lid] or [1])
+        el["customData"] = {"layer": lid, "z": low - 1}
+        scene["elements"].append(el)
+        out = el["id"]
+    elif args.cmd == "mermaid":
+        src = sys.stdin.read() if args.src == "-" else open(os.path.expanduser(args.src)).read()
+        els = mermaid_elements(src, elbow=args.elbow)
+        boxes = [e for e in live(scene) if not (e["type"] == "text" and e.get("containerId"))]   # free text counts too
+        if args.at:
+            ox, oy = pair(args.at, "--at")
+        else:   # below whatever is already there
+            ox = min([e["x"] for e in boxes] or [0]); oy = max([e["y"] + e["height"] for e in boxes] or [-80]) + 80
+        lid = layer_id(scene, args.layer)
+        top = max([e.get("customData", {}).get("z", 0) for e in live(scene)] or [0])
+        for e in els:
+            e["x"] += ox; e["y"] += oy
+            z = e.get("customData", {}).get("z", 0)
+            e["customData"] = {**e.get("customData", {}), "layer": lid, "z": top + 1 + z}
+            scene["elements"].append(e)
+        out = "\n".join(e["id"] for e in els if not (e["type"] == "text" and e.get("containerId")))
+    elif args.cmd == "image":
+        mime, data = read_image(os.path.expanduser(args.src))
+        fid = hashlib.sha1(data).hexdigest()   # Excalidraw's ids are content hashes too: one picture, one file
+        w, h = image_size(data) or (400, 300)
+        if args.w:
+            w, h = args.w, h * args.w / w
+        boxes = [e for e in live(scene) if not (e["type"] == "text" and e.get("containerId"))]
+        if args.at:
+            x, y = pair(args.at, "--at")
+        else:   # below whatever is already there
+            x = min([e["x"] for e in boxes] or [0]); y = max([e["y"] + e["height"] for e in boxes] or [-80]) + 80
+        scene.setdefault("files", {})
+        if fid not in scene["files"]:
+            scene["files"][fid] = {"id": fid, "mimeType": mime, "dataURL": f"data:{mime};base64,{base64.b64encode(data).decode()}",
+                                   "created": int(time.time() * 1000)}
+        el = base("image", x=x, y=y, width=w, height=h, fileId=fid, status="saved", scale=[1, 1], crop=None,
+                  strokeColor="transparent", roughness=0)
+        place(scene, el, args.layer); out = el["id"]
+    elif args.cmd == "rotate":
+        da = math.radians(args.deg)
+        for ref in args.ids:
+            el = find(scene, ref)
+            if el["type"] in ("arrow", "line", "freedraw"):
+                # Lines keep angle 0: turn their points about their center.
+                xs = [el["x"] + p[0] for p in el["points"]]; ys = [el["y"] + p[1] for p in el["points"]]
+                cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+                c, s_ = math.cos(da), math.sin(da)
+                pts = [(cx + (x - cx) * c - (y - cy) * s_, cy + (x - cx) * s_ + (y - cy) * c) for x, y in zip(xs, ys)]
+                el["x"], el["y"] = pts[0]
+                el["points"] = [[x - pts[0][0], y - pts[0][1]] for x, y in pts]
+                el["startBinding"] = el["endBinding"] = None
+            else:
+                el["angle"] = (el.get("angle", 0) + da) % (2 * math.pi)
+                lab = label_of(scene, el)
+                if lab: lab["angle"] = el["angle"]; touch(lab)
+            touch(el)
+            out = el["id"]
+    elif args.cmd == "clear":
+        for el in live(scene):
+            el["isDeleted"] = True; touch(el)
+    elif args.cmd == "grid":
+        x0, y0 = pair(args.at, "--at"); ids = []
+        kind = KINDS.get(args.kind, "rectangle")
+        args.w = max(args.w, label_min_width(args.labels, kind))   # one width for every cell: the longest word fits whole
+        for i, lab in enumerate(args.labels):
+            r_, c_ = divmod(i, args.cols)
+            el = base(kind, x=x0 + c_ * (args.w + args.gap), y=y0 + r_ * (args.h + args.gap),
+                      width=args.w, height=args.h)
+            place(scene, el, args.layer); set_label(scene, el, lab); ids.append(el["id"])
+        out = "\n".join(ids)
+
+    save(path, scene)
+    if out:
+        print(out)
+
+
+if __name__ == "__main__":
+    main()

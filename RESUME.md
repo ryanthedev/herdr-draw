@@ -1,4 +1,4 @@
-# Resume note: herdr-draw (2026-11-08)
+# Resume note: herdr-draw (2026-11-08, updated 2026-11-11)
 
 For the next session picking this up. Read `CLAUDE.md` first (architecture, ports, dev loop, gotchas).
 
@@ -24,6 +24,18 @@ Built so far (commit order):
 10. Third session (2026-11-08): files open right in excalidraw.com (elbow `fixedPoint`s, label boxes, drawh settles arrows and
     grows shapes), arrow labels travel with copy/duplicate/library, per-glyph text widths for the pane's fonts, boards over
     8 MiB open. Checked against the real excalidraw.com with `scripts/excalidraw-probe.mjs` and live in the isolated Herdr.
+
+## 2026-11-11: labels fit, overlaps, pop-out, published
+
+- Shipped (all pushed): boxes never narrower than their longest word; seam word breaks (no spill); arrow labels at
+  excalidraw.com's spot (`labelAnchor`, probed); `core/lint.js` + `drawh check`; Mermaid lanes; drawh free-text widths;
+  panel pop-out (`panes.js`); commands save/colors/popout/import.
+- Verified live in the isolated window (screenshots in docs/): the Mermaid board, the color picker, the pop-out window,
+  and a 1.98 MB board saved by the pane (`import` of a 1.5 MB PNG; bytes and SHA-1 match; a later drawh write showed up).
+- Published: public repo, topic `herdr-mod` (herdr.dev/mods lists it). `mods/herdr-draw` is the built mod people install:
+  run `scripts/release.sh` before committing user-facing changes (`test/release.test.js` fails while it's stale).
+- Still needs the person (no input reaches the test window): a real ⌘V of a picture, a drag-and-drop, clicking in the
+  popped-out window (swatch, fold, drag the window by its strip), and whether a kept window reopens after a layout switch.
 
 ## Main Herdr window (the person's): installed for testing
 
@@ -186,6 +198,6 @@ drags that element down 150 px. Use it for any "does it open right in excalidraw
 
 ## Rules the person set
 
-- Tests for every feature; verify in the isolated Herdr; commit locally; **don't push**.
+- Tests for every feature; verify in the isolated Herdr; commit and **push** (2026-11-11: the person asked to push and publish).
 - Never drive the person's mouse or keyboard; key input only into the isolated window.
 - Stop and write a note like this one past ~75% context.
