@@ -89,7 +89,7 @@ def base(kind, **kw):
 def text_el(text, x, y, size=20, container=None, color=COLORS["default"]):
     text = text.replace("\\n", "\n")   # `--label "two\nlines"` from a shell
     lines = text.split("\n")
-    w, h = max(len(l) for l in lines) * size * 0.5, len(lines) * size * 1.25   # about core/text.js sans; label boxes are redone by core on save
+    w, h = max(len(l) for l in lines) * size * 0.5, len(lines) * size * 1.25   # a placeholder: core sizes text and label boxes on save
     return base("text", x=x, y=y, width=w, height=h, text=text, originalText=text, fontSize=size, fontFamily=2,
                 textAlign="center" if container else "left", verticalAlign="middle" if container else "top",
                 containerId=container, lineHeight=1.25, autoResize=True, baseline=int(size * 0.9),
@@ -314,15 +314,20 @@ def settle_for_file(scene):
     without the pane and in excalidraw.com: shapes grown to fit their labels, bound arrows' ends on the
     outlines, elbow routes and their fixedPoints (new versions), and
     label boxes (centered in their shape or on their arrow; derived, so no new versions)."""
-    if not any(not e.get("isDeleted") and (e.get("elbowed") or e.get("containerId") or e.get("startBinding") or e.get("endBinding")) for e in scene["elements"]):
-        return
     # Only what this run changed (and arrows bound to it) is re-routed or grown, as the pane settles only what was
     # edited: an arrow excalidraw.com aimed off-center stays as it is until someone moves it or its shapes.
     touched = [e["id"] for e in scene["elements"] if LOADED.get(e.get("id")) != (e.get("version"), e.get("versionNonce"))]
+    ids = set(touched)
+    free_text = any(e["id"] in ids and e.get("type") == "text" and not e.get("containerId") and not e.get("isDeleted") for e in scene["elements"])
+    if not free_text and not any(not e.get("isDeleted") and (e.get("elbowed") or e.get("containerId") or e.get("startBinding") or e.get("endBinding")) for e in scene["elements"]):
+        return
     url = lambda m: json.dumps("file://" + os.path.join(core_dir(), m))
-    script = ("import { Doc } from %s; import { settle, fileScene } from %s; import { touch, isShape } from %s; import { labelHostHeight, labelHostWidth } from %s; import { overlaps } from %s;"
+    script = ("import { Doc } from %s; import { settle, fileScene } from %s; import { touch, isShape, textSize } from %s; import { labelHostHeight, labelHostWidth } from %s; import { overlaps } from %s;"
               "let s = ''; process.stdin.on('data', d => s += d); process.stdin.on('end', () => {"
               " const { scene, touched } = JSON.parse(s), doc = new Doc(scene), out = {}, t = new Set(touched);"
+              # free text this run wrote takes its width from the font tables (drawh only guessed it)
+              " for (const el of doc.live()) if (el.type === 'text' && !el.containerId && t.has(el.id)) { const z = textSize(el.text, el.fontSize, el.lineHeight, el.fontFamily);"
+              "  if (z.w !== el.width || z.h !== el.height) { const c = structuredClone(el); c.width = z.w; c.height = z.h; doc.apply({ elements: [c] }, { force: true }); out[c.id] = c; } }"
               # shapes grow to fit their labels (the pane's fitHost): wide enough for the longest word (about their
               # center), then down for the wrapped lines, before arrows are routed to them
               " for (const el of doc.live()) { const l = isShape(el) && doc.labelOf(el); if (!l || !l.text || !(t.has(el.id) || t.has(l.id))) continue;"

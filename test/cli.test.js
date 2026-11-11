@@ -128,3 +128,13 @@ test("drawh frame: named pages, around elements or at a spot, under the drawing,
   expect(ed.frameAt).toBe(p2);
   expect(() => drawh("frame", f, "nowhere")).toThrow(/--at X,Y or --around/);
 });
+
+test("drawh text: free text takes its width from the font tables, not a per-character guess", async () => {
+  const { textSize } = await import("../core/model.js");
+  const f = `${mkdtempSync(`${tmpdir()}/drawh-`)}/t.excalidraw`;
+  for (const [t, y] of [["WWWW", 0], ["iiii", 100], ["two\\nlines here", 200]]) Bun.spawnSync([`${ROOT}cli/drawh`, "text", f, t, "--at", `0,${y}`]);
+  const els = JSON.parse(readFileSync(f, "utf8")).elements;
+  for (const e of els) { const z = textSize(e.text, e.fontSize, e.lineHeight, e.fontFamily); expect([e.text, e.width, e.height]).toEqual([e.text, z.w, z.h]); }
+  const w = t => els.find(e => e.text === t).width;
+  expect(w("WWWW")).toBeGreaterThan(w("iiii") * 3);
+});
