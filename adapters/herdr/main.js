@@ -6,7 +6,7 @@
 
 import { View, div, image, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
-import { props, exec, theme, settings, home, appHome, nextCommand, panes, focused, readTextFile, writeTextFile, fonts, machines, spaces } from "herdr";
+import { props, exec, theme, settings, home, appHome, nextCommand, panes, focused, readTextFile, writeTextFile, fonts, machines, spaces, openOverlay, closeOverlay } from "herdr";
 import { Editor, TOOLS, STROKES, FILLS, WIDTHS, STYLES } from "./core/editor.js";
 import { withAlpha, planBatches } from "./core/render.js";
 import { PRESET_NAMES } from "./core/anim.js";
@@ -27,6 +27,7 @@ import { emptyScene } from "./core/model.js";
 import { panelLayout, panelSections, dragWidth, titleOf, WIDTH } from "./core/panel.js";
 import { panelState, loadPanel, changePanel, savePanel, panelChanged } from "./panel-store.js";
 import { colorRow, pickerModel, parseColorInput, inkOn } from "./core/color.js";
+import { addBoard, removeBoard, useBoard, activeBoard, popoutId, setPopout, listen, ping } from "./panes.js";
 
 const MOD = "herdr-draw";
 // Boards: new ones go in ~/boards; the recent list is shared by every board pane.
@@ -139,6 +140,7 @@ function cx_free_write(dir, name, text) {
 export default class Draw extends View {
   init(_props, cx) {
     const p = props() ?? {};
+    if (p.panel) return this.initPanel(p, cx);
     this.propFile = p.file ? String(p.file).replace(/^~(?=\/)/, home()) : null;
     this.propMachine = typeof p.machine === "string" && p.machine ? p.machine : null;   // where the file lives (null: here)
     // A pane remembers the board it was switched to (⌘O), as long as it was opened on the same props.
@@ -181,6 +183,46 @@ export default class Draw extends View {
     });
     this.input.on("focus", () => { this.inputFocused = true; });
     this.input.on("blur", (_e, cx) => { this.inputFocused = false; if (this.ed.text) { this.ed.commitText(); this.after(cx); } });
+    this.panelInputs();
+    this.lib = new LibraryStore({ onChange: () => { this.previews.clear(); }, onError: m => { this.flash = m; } });
+    cx.spawn(async acx => { await this.lib.start(acx); });
+    // The side panel's settings are every pane's (panel-store.js): redraw when any pane changes them.
+    cx.spawn(async acx => { await loadPanel(); acx.notify(); for (;;) { await panelChanged(); acx.notify(); } });
+    if (this.file) this.startStore(cx);
+    else cx.timer.after(30, cx => { this.openPicker(cx); cx.notify(); });   // no board yet (⌘⇧B): pick one
+    // The popped-out panel (panes.js) drives the board used last; its changes land here to be saved.
+    addBoard(this);
+    this.changes = listen();
+    cx.spawn(async acx => { for (;;) { const what = await this.changes.next(); if (what === "panel" && activeBoard() === this) this.after(acx); else if (what === "popout") acx.notify(); } });
+    cx.spawn(async cx => {
+      for (;;) {
+        const c = await nextCommand();
+        if (c === "fit") this.ed.fit();
+        else if (c === "play") this.ed.playToggle();
+        else if (c === "export") { if (this.file) await this.exportBoard(); }
+        else if (c === "write") this.ed.beginText(null, this.ed.toWorld({ x: this.size.w / 3, y: this.size.h / 3 }));   // start typing (no mouse needed)
+        else if (c === "help") { this.help = !this.help; if (this.help) this.loadKeys(cx); }
+        else if (c === "demo") { if (this.board) this.endDemo(); else this.startDemo(); }
+        else if (c === "perf") { this.writePerf(); continue; }
+        else if (c === "open") { if (this.picker) this.closePicker(cx); else this.openPicker(cx); }
+        // Commands that act once, on the board used last (every board pane may get them).
+        else if (c === "popout") { if (activeBoard() === this) this.togglePopout(); continue; }
+        else if (c === "colors") {   // the Stroke picker, in view: Properties unfolded, or its tab shown
+          if (activeBoard() !== this) continue;
+          this.sidebar = true; this.customize = false;
+          changePanel(panelState().mode === "tabs" ? { type: "tab", id: "properties" } : { type: "fold", id: "properties", folded: false });
+          if (this.colorPick !== "stroke") this.toggleColorPick("stroke");
+        }
+        else if (c === "import") { if (activeBoard() !== this) continue; await this.importQueued(); }
+        else if (c === "save") { if (this.store) await this.store.flush(cx); continue; }
+        else if (c === "focus") { cx.timer.after(60, () => { if (panes().find(q => q.focused)?.mod === MOD) this.handle.focus(); }); continue; }
+        this.after(cx);
+      }
+    });
+  }
+
+  // The side panel's own fields and inputs (a board pane's, and the popped-out panel's).
+  panelInputs() {
     this.layerInput = InputState.new({ value: "", placeholder: "Layer name" });
     this.layerInput.on("submit", (_e, cx) => { if (this.renaming) this.ed.updateLayer(this.renaming, { name: this.layerInput.value() || "Layer" }); this.renaming = null; this.handle.focus(); this.after(cx); });
     // The color picker under the Stroke or Fill row: which one is open (this pane only), its hex
@@ -196,36 +238,20 @@ export default class Draw extends View {
       this.applyColor(this.colorPick, r.color);
       this.hexFocused = false; this.handle.focus(); this.after(cx);
     });
-    this.lib = new LibraryStore({ onChange: () => { this.previews.clear(); }, onError: m => { this.flash = m; } });
-    this.previews = new Map();   // library item id → its preview's path layers
-    cx.spawn(async acx => { await this.lib.start(acx); });
-    // The side panel's settings are every pane's (panel-store.js): redraw when any pane changes them.
     this.sideW = 0;           // the panel's width as last drawn (0: hidden)
     this.panelDrag = null;    // dragging the panel's edge: { x, w }
     this.secDrag = null;      // dragging a section title: { id, moved }
     this.customize = false;   // the panel shows its own settings
-    cx.spawn(async acx => { await loadPanel(); acx.notify(); for (;;) { await panelChanged(); acx.notify(); } });
-    if (this.file) this.startStore(cx);
-    else cx.timer.after(30, cx => { this.openPicker(cx); cx.notify(); });   // no board yet (⌘⇧B): pick one
-    cx.spawn(async cx => {
-      for (;;) {
-        const c = await nextCommand();
-        if (c === "fit") this.ed.fit();
-        else if (c === "play") this.ed.playToggle();
-        else if (c === "export") { if (this.file) await this.exportBoard(); }
-        else if (c === "write") this.ed.beginText(null, this.ed.toWorld({ x: this.size.w / 3, y: this.size.h / 3 }));   // start typing (no mouse needed)
-        else if (c === "help") { this.help = !this.help; if (this.help) this.loadKeys(cx); }
-        else if (c === "demo") { if (this.board) this.endDemo(); else this.startDemo(); }
-        else if (c === "perf") { this.writePerf(); continue; }
-        else if (c === "open") { if (this.picker) this.closePicker(cx); else this.openPicker(cx); }
-        else if (c === "focus") { cx.timer.after(60, () => { if (panes().find(q => q.focused)?.mod === MOD) this.handle.focus(); }); continue; }
-        this.after(cx);
-      }
-    });
+    this.previews = new Map();   // library item id → its preview's path layers
   }
 
-  // Herdr closes this pane (or quits): no more checks on another machine's board.
-  async close() { this.store?.stop(); }
+  // Herdr closes this pane (or quits): no more checks on another machine's board. The panel window
+  // closing (its ✕, a layout switch) docks the panel again in every board pane.
+  async close() {
+    this.changes?.stop();
+    if (this.panelOnly) { if (popoutId() === this.overlay) setPopout(null); return; }
+    this.store?.stop(); removeBoard(this);
+  }
 
   loadKeys(cx) {
     cx.spawn(async cx => { try { this.taken = takenKeys(await readTextFile(`${appHome()}/keys.json`)); cx.notify(); } catch {} });
@@ -447,6 +473,7 @@ export default class Draw extends View {
 
   // After every event: keep the text box, timer and agent selection file in step.
   after(cx) {
+    if (this.panelOnly) return this.panelAfter(cx);
     const ed = this.ed;
     if (ed.text && !this.textOpen) {
       this.textOpen = true; this.input.set_value(ed.text.value);
@@ -467,6 +494,7 @@ export default class Draw extends View {
     if (key !== this.selKey && !ed.g && !this.board) { this.selKey = key; this.writeSelection(); }
     if (this.dirty && this.store) { this.dirty = false; this.store.schedule(cx); }
     if (!ed.g) this.store?.flushPending(cx);
+    useBoard(this); ping("board");   // the popped-out panel shows this board
     cx.notify();
   }
 
@@ -537,7 +565,7 @@ export default class Draw extends View {
       cx.stop_propagation(); return;
     }
     if (!ed.text && cmd && m.shift && e.key === "e") { if (this.board) { this.flash = "the demo isn't saved or exported: Esc goes back to your board"; cx.stop_propagation(); return this.after(cx); } cx.spawn(async cx => { await this.exportBoard(); cx.notify(); }); cx.stop_propagation(); return this.after(cx); }
-    if (!ed.text && !m.platform && !m.control && e.key === "i") { this.sidebar = !this.sidebar; cx.stop_propagation(); return this.after(cx); }
+    if (!ed.text && !m.platform && !m.control && e.key === "i") { if (popoutId()) this.togglePopout(); else this.sidebar = !this.sidebar; cx.stop_propagation(); return this.after(cx); }
     if (ed.key(e.key, mm)) { cx.stop_propagation(); this.after(cx); }
   }
 
@@ -666,8 +694,9 @@ export default class Draw extends View {
 
   renderView(cx) {
     const t = theme();
+    if (this.panelOnly) return this.panelWindow(t);
     this.ensureImages(cx);
-    const side = panelLayout({ ...panelState(), open: this.sidebar }, this.size.w + this.sideW);
+    const side = panelLayout({ ...panelState(), open: this.sidebar && !popoutId() }, this.size.w + this.sideW);
     this.sideW = side.width;
     cx.spawn(async acx => { await this.drawRotated(acx); await this.loadPreviews(acx); });   // after this frame: rotated text PNGs, picker previews
     return v_flex().id("draw").size_full().min_h(0).bg(t.background).text_color(t.foreground)
@@ -709,7 +738,8 @@ export default class Draw extends View {
       .child(div().text_size(12).text_color(this.error ? t.blocked : t.dim).truncate().child(status))
       .child(div().w(8))
       .child(this.button(t, "zoom", div().text_size(11).text_color(t.muted).child(`${Math.round(ed.view.scale * 100)}%`), false, "Fit everything (⇧1)", () => ed.fit()))
-      .child(this.button(t, "side", labelled("◧", "I", 13), this.sidebar, "Properties and layers (I)", () => { this.sidebar = !this.sidebar; }))
+      .child(this.button(t, "side", labelled("◧", "I", 13), this.sidebar && !popoutId(), popoutId() ? "Dock the panel back here (I)" : "Properties and layers (I)",
+        () => { if (popoutId()) this.togglePopout(); else this.sidebar = !this.sidebar; }))
       .child(this.button(t, "help", div().text_size(13).font_semibold().child("?"), this.help, "Every shortcut, and a demo (?)", () => { this.help = !this.help; }))
       .child(div().id("board-name").ml(4).px(6).h(24).rounded(5).flex().items_center().gap(4).cursor_pointer().hover(s => s.bg(t.hover)).tooltip("Switch board or make a new one (⌘O)")
         .on_click((_e, cx) => { this.openPicker(cx); cx.notify(); })
@@ -907,6 +937,68 @@ export default class Draw extends View {
         .child(h_flex().flex_wrap().gap(18).items_start().children(SHORTCUTS.map(group))));
   }
 
+  // ── the popped-out panel ─────────────────────────────────────────────
+  // The side panel in a Herdr window of its own (openOverlay kind "window"), kept across restarts.
+  // It is this view in panel-only mode: no editor, file or command loop of its own; it shows and
+  // changes the board pane used last (panes.js), and each side wakes the other to redraw and save.
+
+  togglePopout() {
+    const id = popoutId();
+    if (id) { closeOverlay(id); setPopout(null); this.sidebar = true; return; }
+    const w = Math.round(panelState().width ?? WIDTH.default);
+    setPopout(openOverlay({ mod: MOD, kind: "window", key: `${MOD}.panel`, keep: true, width: w + 2, height: 0.8, props: { panel: true } }));
+  }
+
+  initPanel(p, cx) {
+    this.panelOnly = true; this.overlay = p.overlay ?? null;
+    this.handle = cx.focus_handle();
+    this.taken = new Set(); this.loadKeys(cx);
+    this.imgs = new Map(); this.size = { w: 300, h: 600 }; this.ownFlash = null;
+    // The board's own editor, library and status line; nothing here when no board of this build is open.
+    Object.defineProperty(this, "ed", { get: () => activeBoard()?.ed ?? null, configurable: true });
+    Object.defineProperty(this, "lib", { get: () => activeBoard()?.lib ?? null, configurable: true });
+    Object.defineProperty(this, "flash", { get: () => activeBoard()?.flash ?? this.ownFlash, set: v => { const b = activeBoard(); if (b) b.flash = v; else this.ownFlash = v; }, configurable: true });
+    this.panelInputs();
+    if (this.overlay) setPopout(this.overlay);   // a kept window, reopened at start: the board panes dock theirs
+    cx.spawn(async acx => { await loadPanel(); acx.notify(); for (;;) { await panelChanged(); acx.notify(); } });
+    this.changes = listen();
+    cx.spawn(async acx => { for (;;) { const what = await this.changes.next(); if (what !== "panel") acx.notify(); } });
+  }
+
+  // The panel window's after(): the board saves and redraws on its own loop, with its own cx.
+  panelAfter(cx) { ping("panel"); cx.notify(); }
+
+  panelWindow(t) {
+    const b = activeBoard(), name = b?.file ? boardName(b.file.split("/").pop()) : null;
+    const st = panelState(), rows = b ? panelSections(st, id => this.sectionAvailable(id)) : [];
+    // The strip on top drags the window; every press below it stops, so controls don't drag it.
+    const strip = h_flex().id("pop-strip").w_full().h(28).px(8).gap(6).items_center().flex_shrink_0().border_b(1).border_color(t.border)
+      .child(div().text_size(12).text_color(t.dim).child("◧"))
+      .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.muted).child(name ? `${b.machine ? `${b.machine} · ` : ""}${name}` : "herdr-draw"))
+      .child(div().id("pop-dock").on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .child(this.chip(t, "pop-dock-btn", "dock", false, "Put the panel back beside the board", () => { closeOverlay(this.overlay); setPopout(null); }, 40)));
+    const body = v_flex().id("pop-body").w_full().flex_1().min_h(0).on_mouse_down("left", (_e, cx) => cx.stop_propagation());
+    if (!b) return v_flex().id("draw-pop").size_full().bg(t.surface ?? t.background).text_color(t.foreground).child(strip)
+      .child(body.p(12).gap(8)
+        .child(div().text_size(12).text_color(t.muted).child("No board open on this build of herdr-draw. Open a board (⌘⇧B), or reopen its pane: a pane opened before an update runs the older build."))
+        .child(this.chip(t, "pop-close", "close", false, "Close this window", () => { closeOverlay(this.overlay); setPopout(null); }, 48)));
+    const content = this.customize ? [this.panelSettings(t, st)] : rows.filter(r => r.active).map(r => this.sectionBlock(t, r, st.mode)).filter(Boolean);
+    return v_flex().id("draw-pop").size_full().bg(t.surface ?? t.background).text_color(t.foreground)
+      .on_mouse_move((e, cx) => this.panelMove(e, cx)).on_mouse_up("left", (_e, cx) => this.panelDragEnd(cx))
+      .child(strip)
+      .child(body.child(this.panelBar(t, st, rows)).child(v_flex().id("side-scroll").w_full().flex_1().min_h(0).overflow_y_scroll().children(content)));
+  }
+
+  // `herdr-app do herdr-draw.import`: the picture paths listed in <appHome>/herdr-draw/import.json go on the board
+  // (as a drop would put them), then the list is removed. For checks that can't drag or paste.
+  async importQueued() {
+    const f = `${appHome()}/herdr-draw/import.json`;
+    let paths = [];
+    try { paths = JSON.parse(await readTextFile(f) ?? "[]"); } catch { paths = []; }
+    exec("rm", ["-f", f]);
+    if (Array.isArray(paths) && paths.length) await this.importImages(paths.filter(x => typeof x === "string"));
+  }
+
   // ── panels ─────────────────────────────────────────────────────────────
 
   // A section's title and body; sidePanel draws them (stacked with a foldable title, or as a tab).
@@ -927,6 +1019,7 @@ export default class Draw extends View {
   // The panel: a drag edge on its left, a bar (tabs, stack/tabs, fold all, settings), then the
   // sections in the person's order. Its layout is the same in every board pane (panel-store.js).
   sidePanel(t, width) {
+    if (!this.panelOnly && popoutId()) return div();
     const st = panelState(), rows = panelSections(st, id => this.sectionAvailable(id));
     const content = this.customize ? [this.panelSettings(t, st)]
       : rows.filter(r => r.active).map(r => this.sectionBlock(t, r, st.mode)).filter(Boolean);
@@ -951,6 +1044,7 @@ export default class Draw extends View {
           () => changePanel({ type: "mode", mode: tabs ? "stack" : "tabs" })))
         .when(!tabs, b => b.child(this.chip(t, "side-fold", rows.some(r => !r.folded) ? "⊟" : "⊞", false, "Fold or unfold every section",
           () => changePanel({ type: "foldAll", folded: rows.some(r => !r.folded) })))))
+      .when(!this.panelOnly && !this.customize, b => b.child(this.chip(t, "side-popout", "⧉", false, "Pop the panel out into its own window", () => this.togglePopout())))
       .child(this.chip(t, "side-gear", this.customize ? "done" : "⚙", this.customize, this.customize ? "Back to the panel" : "Panel settings: sections, order, layout",
         () => { this.customize = !this.customize; }, this.customize ? 40 : 26));
   }

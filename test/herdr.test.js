@@ -832,3 +832,97 @@ test("another machine's board: commands to it are capped, polls back off when it
     expect(calls.remote.length).toBe(n);
   } finally { Object.assign(calls, was); calls.remote = []; }
 });
+
+// ── the popped-out panel: the side panel in a Herdr window of its own ──
+// Each of these gets a board file of its own (earlier tests' panes still watch the shared one).
+async function openOwn() {
+  const f = `${mkdtempSync(`${tmpdir()}/herdr-draw-pop-`)}/b.excalidraw`, was = calls.props;
+  calls.props = { file: f };
+  try { const ui = await open(); ui.disk = () => JSON.parse(readFileSync(f, "utf8")); return ui; } finally { calls.props = was; }
+}
+function openPanel(overlay = "ov-test") {
+  const cxs = makeCx(calls), view = new Draw(), was = calls.props;
+  calls.props = { panel: true, overlay };
+  try { cxs.call(c => view.init({}, c)); } finally { calls.props = was; }
+  const ui = {
+    view, cx: cxs,
+    tree: () => cxs.call(c => view.render(c)).__node,
+    fire(id, handler, ev = {}) { const n = byId(ui.tree(), id); if (!n) throw new Error(`no element ${id}`); const h = n.handlers[handler]; if (!h) throw new Error(`${id} has no ${handler}`); cxs.call(c => h(ev, c)); },
+    click(id) { ui.fire(id, "on_click", {}); },
+  };
+  return ui;
+}
+
+test("pop-out: ⧉ opens the panel as a kept window, the board docks its own, and the window drives the board", async () => {
+  const board = await openOwn();
+  board.click("tool-rectangle"); board.drag([100, 100], [260, 200]);   // a selected rectangle
+  await board.cx.flush();
+  board.click("side-popout");
+  const ov = calls.overlays.at(-1);
+  expect([ov.mod, ov.kind, ov.key, ov.keep, ov.props.panel]).toEqual(["herdr-draw", "window", "herdr-draw.panel", true, true]);
+  expect(byId(board.tree(), "draw-side")).toBeFalsy();                // no docked panel while it's out
+  const before = calls.exec.filter(c => c.includes("txt-reset")).length;
+  const panel = openPanel(ov.id);
+  expect(calls.exec.filter(c => c.includes("txt-reset")).length).toBe(before);   // the panel copy owns no board or caches
+  expect(textOf(byId(panel.tree(), "pop-strip"))).toContain(board.view.file.split("/").pop().replace(".excalidraw", ""));   // the strip names the board
+  // A stroke swatch in the window restyles the board's selection, and the board saves it.
+  const id = board.view.ed.selected()[0].id, rect = () => board.disk().elements.find(e => e.id === id);
+  const was = rect().strokeColor;
+  panel.click("st-2");
+  await panel.cx.flush(); await board.cx.flush();
+  expect(rect().strokeColor).not.toBe(was);
+  expect(rect().strokeColor).toBe(board.view.ed.selected()[0].strokeColor);
+  // Presses in the window's body stop (they'd drag the window); the strip on top is left to drag it.
+  const n = calls.stopped ?? 0;
+  panel.fire("pop-body", "on_mouse_down:left", {});
+  expect(calls.stopped).toBe(n + 1);
+  expect(byId(panel.tree(), "pop-strip").handlers["on_mouse_down:left"]).toBeUndefined();
+  // dock: the window closes and the board shows its panel again.
+  panel.click("pop-dock-btn");
+  expect(calls.closed).toContain(ov.id);
+  await board.cx.flush();
+  expect(byId(board.tree(), "draw-side")).toBeTruthy();
+});
+
+test("pop-out: I docks it back; the window closing (a layout switch) docks it too", async () => {
+  const board = await openOwn();
+  board.click("side-popout");
+  const ov = calls.overlays.at(-1), panel = openPanel(ov.id);
+  board.key("i");
+  expect(calls.closed).toContain(ov.id);
+  expect(byId(board.tree(), "draw-side")).toBeTruthy();
+  board.click("side-popout");
+  const ov2 = calls.overlays.at(-1), panel2 = openPanel(ov2.id);
+  expect(byId(board.tree(), "draw-side")).toBeFalsy();
+  await panel2.view.close();                                          // Herdr closed the window
+  expect(byId(board.tree(), "draw-side")).toBeTruthy();
+});
+
+test("commands for checks with no keyboard: save, colors, import", async () => {
+  const board = await openOwn();
+  board.click("tool-rectangle"); board.drag([100, 100], [200, 160]);
+  await board.cx.flush();
+  // colors: the side panel opens with the Stroke picker.
+  calls.command("colors"); await board.cx.flush();
+  expect(board.view.colorPick).toBe("stroke");
+  expect(byId(board.tree(), "cp-grid")).toBeTruthy();
+  // import: pictures listed in import.json, as a drop would bring them; the list is removed.
+  mkdirSync(`${home}/herdr-draw`, { recursive: true });
+  writeFileSync(`${home}/herdr-draw/import.json`, JSON.stringify(["/tmp/a.png"]));
+  calls.command("import"); await board.cx.flush();
+  expect(calls.exec.some(c => c.includes("img-import") && c.includes("/tmp/a.png"))).toBe(true);
+  expect(calls.exec.some(c => c[0] === "rm" && c.includes(`${home}/herdr-draw/import.json`))).toBe(true);
+  // save: flushes now (no 250 ms wait).
+  board.view.ed.selectAll?.();
+  calls.command("save"); await board.cx.flush(1);
+  expect(board.disk().elements.some(e => e.type === "rectangle" && !e.isDeleted)).toBe(true);
+});
+
+test("pop-out with no board of this build open says so instead of drawing blank", async () => {
+  const panes = await import(`${ROOT}build/herdr-draw/panes.js`);
+  while (panes.activeBoard()) panes.removeBoard(panes.activeBoard());
+  const panel = openPanel("ov-lonely");
+  expect(textOf(panel.tree())).toContain("No board open on this build");
+  panel.click("pop-close");
+  expect(calls.closed).toContain("ov-lonely");
+});

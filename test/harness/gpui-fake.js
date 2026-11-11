@@ -62,6 +62,7 @@ class FakeInput {
 
 export function installFakes({ file, home }) {
   const calls = { exec: [], notify: 0 };
+  calls.command = name => { const w = calls.cmdWaiters ?? []; calls.cmdWaiters = []; for (const r of w) r(name); };
   globalThis.window = { paint_path: (path, color) => makeEl("path", { path, color }) };
   mock.module("gpui-kit", () => ({
     View: class {},
@@ -89,7 +90,10 @@ export function installFakes({ file, home }) {
     appHome: () => home,
     panes: () => [],
     focused: () => ({ space: "s1", tab: "t1", pane: "p1", terminal: null, shown: null, agent: null, cwd: calls.cwd ?? home }),
-    nextCommand: () => new Promise(() => {}),
+    // `herdr-app do herdr-draw.NAME`: calls.command(NAME) wakes every copy waiting for one.
+    nextCommand: () => new Promise(r => (calls.cmdWaiters ??= []).push(r)),
+    openOverlay: spec => { const id = `ov${(calls.overlays ??= []).length + 1}`; calls.overlays.push({ id, ...spec }); return id; },
+    closeOverlay: id => { (calls.closed ??= []).push(id); return null; },
     watchFolder: () => new Promise(() => {}),
     // Herdr's limits, as seen live: readTextFile rejects files over 1 MiB. writeTextFile's limit
     // isn't documented; the fake refuses over 1 MiB too, so nothing comes to rely on it.
@@ -135,7 +139,7 @@ export function makeCx(calls) {
       notify: guard("notify", () => { calls.notify++; }),
       spawn: guard("spawn", fn => { const p = Promise.resolve().then(() => fn(asyncCx)); p.catch(e => { calls.errors = (calls.errors ?? []).concat(String(e)); }); return { cancel() {}, is_done: () => false, p }; }),
       focus_handle: guard("focus_handle", () => ({ focus() { focus.input = null; } })),
-      stop_propagation: guard("stop_propagation", () => {}),
+      stop_propagation: guard("stop_propagation", () => { calls.stopped = (calls.stopped ?? 0) + 1; }),
       timer: {
         after: guard("timer.after", (ms, fn) => { const t = { ms, fn, every: false, cancelled: false, cancel() { this.cancelled = true; } }; timers.push(t); return t; }),
         every: guard("timer.every", (ms, fn) => { const t = { ms, fn, every: true, cancelled: false, cancel() { this.cancelled = true; } }; timers.push(t); return t; }),

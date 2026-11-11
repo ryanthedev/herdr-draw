@@ -24,6 +24,8 @@ core/            pure JS, no imports from Herdr, the DOM, Node or the network
 adapters/herdr/  the Herdr mod: GPUI events → editor; display list → GPUI. store.js = file port;
                  panel-store.js = the panel's settings (<appHome>/herdr-draw/panel.json), one module-level copy
                  every pane shares (Herdr runs a mod's module once for all its copies, AGENTS.md)
+                 panes.js = the board panes and the popped-out panel window (⧉ in the panel bar): the window is the
+                 same view in panel-only mode, driving the board used last; each side wakes the other via listen()/ping()
 adapters/svg/    display list → SVG (tests, export)
 cli/drawh        the agents' CLI (Python, edits the file; pane picks it up)
 test/            bun test: core with synthetic input; the real Herdr adapter on a fake GPUI
@@ -71,7 +73,8 @@ be resumed (seen 2026-11-08 on t4t and t4v). Give that home `shared.json`
 `{"layout":"drawtest","frame.welcomed":"finished"}` and a `layouts/drawtest.json` whose root is a
 block with `{"mod":"herdr-draw","props":{"file":...}}`. Show the board as a layout block, never
 `tab.new`/`pane.split`: spaces and tabs are shared with the person's window through herdr-core.
-Drive it with `HERDR_APP_HOME=... herdr-app do herdr-draw.<fit|play|write>`, `herdr-app shot`, and key input
+Drive it with `HERDR_APP_HOME=... herdr-app do herdr-draw.<fit|play|write|save|colors|popout|import>` (import: picture
+paths listed in `<appHome>/herdr-draw/import.json`; colors: the Stroke picker in view; one-shot commands act on the board used last), `herdr-app shot`, and key input
 sent only to that window's id; quit it by its pid when done.
 
 ## Gotchas
